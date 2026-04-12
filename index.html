@@ -1,0 +1,1366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#2563eb">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<title>Inventory Manager</title>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+/* ========== CSS VARIABLES ========== */
+:root {
+  --primary: #2563eb;
+  --primary-light: #3b82f6;
+  --primary-dark: #1d4ed8;
+  --accent: #f59e0b;
+  --bg: #f1f5f9;
+  --card-bg: #ffffff;
+  --text: #0f172a;
+  --text-light: #64748b;
+  --border: #e2e8f0;
+  --success: #22c55e;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+  --shadow: 0 2px 8px rgba(0,0,0,0.08);
+  --shadow-lg: 0 4px 16px rgba(0,0,0,0.12);
+  --radius: 12px;
+  --radius-sm: 8px;
+  --tab-height: 64px;
+  --header-height: 56px;
+  --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* ========== RESET ========== */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 16px; }
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  padding-top: var(--header-height);
+  padding-bottom: var(--tab-height);
+  -webkit-tap-highlight-color: transparent;
+  overflow-x: hidden;
+}
+
+/* ========== HEADER ========== */
+.app-header {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+  height: var(--header-height);
+  background: var(--primary);
+  color: white;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 16px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+}
+.header-left { display: flex; align-items: center; gap: 10px; }
+.header-left h1 { font-size: 1.15rem; font-weight: 700; }
+.header-logo { font-size: 1.4rem; }
+
+/* ========== TAB BAR ========== */
+.tab-bar {
+  position: fixed; bottom: 0; left: 0; right: 0; z-index: 100;
+  height: var(--tab-height);
+  background: var(--card-bg);
+  display: flex; align-items: stretch;
+  border-top: 1px solid var(--border);
+  box-shadow: 0 -2px 10px rgba(0,0,0,0.06);
+}
+.tab-btn {
+  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 3px; border: none; background: none; color: var(--text-light);
+  font-size: 0.68rem; font-weight: 500; cursor: pointer; transition: color 0.2s;
+  -webkit-tap-highlight-color: transparent;
+}
+.tab-btn.active { color: var(--primary); font-weight: 700; }
+.tab-btn svg { width: 22px; height: 22px; }
+
+/* ========== MAIN CONTENT ========== */
+main { padding: 12px; max-width: 600px; margin: 0 auto; }
+.tab-page { display: none; }
+.tab-page.active { display: block; }
+
+/* ========== CARDS ========== */
+.card {
+  background: var(--card-bg);
+  border-radius: var(--radius);
+  padding: 16px;
+  margin-bottom: 12px;
+  box-shadow: var(--shadow);
+}
+
+/* ========== BUTTONS ========== */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 10px 18px; border: none; border-radius: var(--radius-sm);
+  font-size: 0.9rem; font-weight: 600; cursor: pointer;
+  transition: all 0.15s; font-family: var(--font);
+}
+.btn-primary { background: var(--primary); color: white; }
+.btn-primary:active { background: var(--primary-dark); }
+.btn-success { background: var(--success); color: white; }
+.btn-danger { background: var(--danger); color: white; }
+.btn-warning { background: var(--warning); color: white; }
+.btn-outline { background: none; border: 2px solid var(--primary); color: var(--primary); }
+.btn-block { width: 100%; display: flex; }
+.btn-sm { padding: 6px 12px; font-size: 0.8rem; }
+
+/* ========== FORMS ========== */
+.form-group { margin-bottom: 12px; }
+.form-label { display: block; font-size: 0.82rem; font-weight: 600; color: var(--primary); margin-bottom: 4px; }
+.form-control {
+  width: 100%; padding: 10px 12px; border: 2px solid var(--border);
+  border-radius: var(--radius-sm); font-size: 0.95rem; font-family: var(--font);
+  background: white; color: var(--text); transition: border 0.2s;
+}
+.form-control:focus { outline: none; border-color: var(--primary); }
+select.form-control { appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 12px center; padding-right: 36px; }
+
+/* ========== STATS GRID ========== */
+.stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
+.stat-card {
+  background: var(--card-bg); border-radius: var(--radius); padding: 14px;
+  text-align: center; box-shadow: var(--shadow);
+}
+.stat-value { font-size: 1.6rem; font-weight: 800; color: var(--primary); }
+.stat-label { font-size: 0.75rem; color: var(--text-light); margin-top: 2px; font-weight: 500; }
+
+/* ========== BADGES ========== */
+.badge {
+  display: inline-block; padding: 3px 8px; border-radius: 20px;
+  font-size: 0.7rem; font-weight: 700; text-transform: uppercase;
+}
+.badge-danger { background: #fef2f2; color: var(--danger); }
+.badge-warning { background: #fffbeb; color: #b45309; }
+.badge-success { background: #f0fdf4; color: #15803d; }
+.badge-info { background: #eff6ff; color: var(--primary); }
+
+/* ========== TOAST ========== */
+.toast-container {
+  position: fixed; top: calc(var(--header-height) + 8px); left: 50%;
+  transform: translateX(-50%); z-index: 9999; pointer-events: none;
+}
+.toast {
+  background: #1e293b; color: white; padding: 10px 20px; border-radius: 8px;
+  font-size: 0.85rem; font-weight: 500; margin-bottom: 6px; opacity: 0;
+  transition: opacity 0.3s; pointer-events: auto; text-align: center;
+  box-shadow: var(--shadow-lg);
+}
+.toast.show { opacity: 1; }
+.toast.error { background: var(--danger); }
+.toast.warning { background: var(--warning); }
+.toast.success { background: var(--success); }
+
+/* ========== MODAL ========== */
+.modal-overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.5); z-index: 200; display: flex;
+  align-items: flex-end; justify-content: center;
+  animation: fadeIn 0.2s;
+}
+.modal-content {
+  background: white; border-radius: 16px 16px 0 0; padding: 20px;
+  width: 100%; max-width: 600px; max-height: 85vh; overflow-y: auto;
+  animation: slideUp 0.25s;
+}
+.modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+.modal-header h3 { font-size: 1.1rem; }
+.modal-close { background: none; border: none; font-size: 1.5rem; cursor: pointer; color: var(--text-light); padding: 4px 8px; }
+
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+
+/* ========== CAMERA ZONE ========== */
+.camera-zone {
+  position: relative; border: 2px dashed var(--border); border-radius: var(--radius);
+  padding: 24px; text-align: center; cursor: pointer; margin-bottom: 12px;
+  background: #f8fafc; transition: border-color 0.2s;
+}
+.camera-zone:active { border-color: var(--primary); }
+.camera-zone.has-photo { border: 2px solid var(--success); padding: 0; overflow: hidden; }
+.camera-zone.has-photo img { width: 100%; max-height: 200px; object-fit: cover; border-radius: var(--radius); }
+.camera-zone input[type="file"] { position: absolute; top: 0; left: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.camera-icon { margin-bottom: 6px; }
+.camera-icon svg { width: 40px; height: 40px; stroke: var(--text-light); }
+.camera-label { font-size: 0.85rem; color: var(--text-light); font-weight: 500; }
+.retake-btn {
+  position: absolute; bottom: 8px; right: 8px; background: rgba(0,0,0,0.6);
+  color: white; border: none; border-radius: 6px; padding: 6px 12px; font-size: 0.75rem;
+  cursor: pointer; z-index: 2;
+}
+
+/* ========== STEP INDICATORS ========== */
+.step-bar { display: flex; gap: 6px; padding: 12px 0; }
+.step-dot { flex: 1; height: 4px; border-radius: 2px; background: var(--border); transition: background 0.3s; }
+.step-dot.active { background: var(--primary); }
+.step-dot.done { background: var(--success); }
+
+/* ========== ISSUE ITEM ROW ========== */
+.issue-item-row {
+  display: flex; align-items: center; gap: 8px; padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+.issue-item-check { width: 20px; height: 20px; accent-color: var(--primary); }
+.issue-item-name { flex: 1; font-size: 0.85rem; font-weight: 500; }
+.issue-item-avail { font-size: 0.75rem; color: var(--text-light); min-width: 30px; text-align: right; }
+.qty-control { display: flex; align-items: center; gap: 2px; }
+.qty-control button {
+  width: 28px; height: 28px; border: 1px solid var(--border); background: white;
+  border-radius: 6px; font-size: 1rem; cursor: pointer; display: flex;
+  align-items: center; justify-content: center;
+}
+.qty-control input {
+  width: 36px; height: 28px; text-align: center; border: 1px solid var(--border);
+  border-radius: 6px; font-size: 0.85rem;
+}
+
+/* ========== INVENTORY ITEM CARD ========== */
+.inv-item {
+  display: flex; align-items: center; gap: 10px; padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+.inv-item:last-child { border-bottom: none; }
+.inv-item-info { flex: 1; }
+.inv-item-name { font-weight: 600; font-size: 0.9rem; }
+.inv-item-meta { font-size: 0.75rem; color: var(--text-light); margin-top: 2px; }
+.inv-item-qty { text-align: center; min-width: 50px; }
+.inv-item-qty .qty-num { font-size: 1.3rem; font-weight: 800; }
+.inv-item-qty .qty-unit { font-size: 0.7rem; color: var(--text-light); }
+.inv-item-actions { display: flex; gap: 4px; }
+.inv-item-actions button {
+  width: 30px; height: 30px; border: 1px solid var(--border); background: white;
+  border-radius: 6px; font-size: 0.9rem; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+}
+
+/* ========== CATEGORY PILLS ========== */
+.cat-pills { display: flex; gap: 6px; overflow-x: auto; padding: 8px 0; -webkit-overflow-scrolling: touch; }
+.cat-pill {
+  flex-shrink: 0; padding: 6px 14px; border-radius: 20px;
+  font-size: 0.78rem; font-weight: 600; cursor: pointer;
+  border: 1.5px solid var(--border); background: white; color: var(--text-light);
+  transition: all 0.15s; white-space: nowrap;
+}
+.cat-pill.active { background: var(--primary); color: white; border-color: var(--primary); }
+
+/* ========== HISTORY CARD ========== */
+.history-item {
+  background: var(--card-bg); border-radius: var(--radius); padding: 14px;
+  margin-bottom: 10px; box-shadow: var(--shadow);
+}
+.history-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px; }
+.history-user { font-weight: 700; font-size: 0.95rem; }
+.history-date { font-size: 0.75rem; color: var(--text-light); }
+.history-staff { font-size: 0.78rem; color: var(--primary); margin-bottom: 6px; }
+.history-items { font-size: 0.82rem; color: var(--text); }
+.history-photo { width: 60px; height: 60px; border-radius: 8px; object-fit: cover; cursor: pointer; margin-top: 6px; }
+
+/* ========== SUCCESS SCREEN ========== */
+.success-screen { text-align: center; padding: 40px 16px; }
+.success-icon { font-size: 3.5rem; }
+
+/* ========== LOW STOCK ALERT ========== */
+.alert-card {
+  background: #fef2f2; border-radius: var(--radius); padding: 14px;
+  border-left: 4px solid var(--danger); margin-bottom: 12px; cursor: pointer;
+}
+.alert-card h4 { color: var(--danger); font-size: 0.9rem; margin-bottom: 4px; }
+.alert-card p { font-size: 0.8rem; color: var(--text-light); }
+
+/* ========== REPORT TABLE ========== */
+.table-wrapper { overflow-x: auto; }
+.report-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+.report-table th { background: var(--primary); color: white; padding: 8px 6px; text-align: left; font-weight: 600; white-space: nowrap; }
+.report-table td { padding: 8px 6px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+
+/* ========== FRIDAY BANNER ========== */
+.friday-banner {
+  display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+  background: #fffbeb; border-radius: var(--radius); margin-bottom: 12px;
+  font-size: 0.82rem; color: #92400e;
+}
+
+/* ========== PHOTO VIEWER ========== */
+.photo-viewer {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.9); z-index: 300; display: flex;
+  align-items: center; justify-content: center; cursor: pointer;
+}
+.photo-viewer img { max-width: 95%; max-height: 90vh; object-fit: contain; border-radius: 8px; }
+
+/* ========== SPINNER ========== */
+.spinner { display: inline-block; width: 20px; height: 20px; border: 3px solid rgba(255,255,255,0.3); border-top-color: white; border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: middle; }
+@keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<!-- ===== HEADER ===== -->
+<header class="app-header">
+  <div class="header-left">
+    <div class="header-logo">&#128230;</div>
+    <h1 id="orgNameHeader">Inventory Manager</h1>
+  </div>
+</header>
+
+<!-- ===== TOAST CONTAINER ===== -->
+<div class="toast-container" id="toastContainer"></div>
+
+<!-- ===== MAIN CONTENT ===== -->
+<main>
+  <!-- === ISSUE TAB === -->
+  <div class="tab-page active" id="pageIssue">
+    <div class="step-bar" id="issueSteps">
+      <div class="step-dot active"></div>
+      <div class="step-dot"></div>
+      <div class="step-dot"></div>
+    </div>
+    <div id="issueFlow"></div>
+  </div>
+
+  <!-- === STOCK TAB === -->
+  <div class="tab-page" id="pageStock">
+    <div class="card" style="padding:10px 12px;">
+      <input class="form-control" id="stockSearch" placeholder="Search items..." oninput="renderInventory()" style="margin-bottom:8px;">
+      <div class="cat-pills" id="catPills"></div>
+    </div>
+    <div id="stockList"></div>
+    <button class="btn btn-primary btn-block" onclick="openAddItemModal()" style="margin-top:10px;">+ Add New Item</button>
+  </div>
+
+  <!-- === HISTORY TAB === -->
+  <div class="tab-page" id="pageHistory">
+    <div class="card" style="padding:10px 12px;">
+      <input class="form-control" id="historySearch" placeholder="Search by name, room, staff..." oninput="renderHistory()">
+    </div>
+    <div id="historyList"></div>
+  </div>
+
+  <!-- === DASHBOARD TAB === -->
+  <div class="tab-page" id="pageDashboard">
+    <div id="dashStats"></div>
+    <div id="dashAlerts"></div>
+    <div class="card">
+      <h3 style="font-size:0.95rem; margin-bottom:10px;">Stock by Category</h3>
+      <canvas id="dashChart" height="200"></canvas>
+    </div>
+  </div>
+
+  <!-- === REPORTS TAB === -->
+  <div class="tab-page" id="pageReports">
+    <div class="card">
+      <h3 style="font-size:0.95rem; margin-bottom:12px;">Generate Report</h3>
+      <div style="display:flex; gap:8px; margin-bottom:12px;">
+        <div class="form-group" style="flex:1;">
+          <label class="form-label">From</label>
+          <input type="date" class="form-control" id="reportFrom">
+        </div>
+        <div class="form-group" style="flex:1;">
+          <label class="form-label">To</label>
+          <input type="date" class="form-control" id="reportTo">
+        </div>
+      </div>
+      <button class="btn btn-primary btn-block" onclick="generateReport()">View Report</button>
+      <button class="btn btn-success btn-block" onclick="downloadExcelReport()" style="margin-top:8px;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Download Excel Report
+      </button>
+    </div>
+    <div id="fridayBanner"></div>
+    <div style="display:flex; align-items:center; gap:8px; margin:12px 0;">
+      <label style="font-size:0.85rem; font-weight:600;">Auto Friday Report</label>
+      <input type="checkbox" id="fridayToggle" onchange="toggleFridayReport()" style="width:18px; height:18px; accent-color:var(--primary);">
+    </div>
+    <div id="reportSummary"></div>
+    <div id="reportTable"></div>
+  </div>
+</main>
+
+<!-- ===== MODAL ===== -->
+<div class="modal-overlay" id="modalOverlay" style="display:none;" onclick="if(event.target===this)closeModal()">
+  <div class="modal-content" id="modalContent"></div>
+</div>
+
+<!-- ===== TAB BAR ===== -->
+<nav class="tab-bar">
+  <button class="tab-btn active" onclick="switchTab('Issue')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+    Issue
+  </button>
+  <button class="tab-btn" onclick="switchTab('Stock')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+    Stock
+  </button>
+  <button class="tab-btn" onclick="switchTab('History')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+    History
+  </button>
+  <button class="tab-btn" onclick="switchTab('Dashboard')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+    Dashboard
+  </button>
+  <button class="tab-btn" onclick="switchTab('Reports')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+    Reports
+  </button>
+</nav>
+
+<script>
+/* =================================================================
+   DATA LAYER
+   ================================================================= */
+const KEYS = { items: 'inv_items', transactions: 'inv_transactions', settings: 'inv_settings', fridayReport: 'inv_friday_report' };
+const CATEGORIES = ['Baby Food','Baby Formula','Baby Equipment','Baby Care','Nappies','Toiletries','Sanitary Products','Medical','Cleaning','Office Supplies','Technology','Tools','Consumables','Other'];
+const UNITS = ['pcs','jars','bottles','boxes','packs','tins','tubes','rolls','pairs','kg','litres','sheets','sets'];
+
+function load(key) { try { return JSON.parse(localStorage.getItem(key)); } catch { return null; } }
+function save(key, data) { localStorage.setItem(key, JSON.stringify(data)); }
+function getItems() { return load(KEYS.items) || []; }
+function saveItems(items) { save(KEYS.items, items); }
+function getTransactions() { return load(KEYS.transactions) || []; }
+function saveTransactions(txns) { save(KEYS.transactions, txns); }
+function getSettings() { return load(KEYS.settings) || { fridayAutoReport: false }; }
+function saveSettings(s) { save(KEYS.settings, s); }
+function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
+function today() { return new Date().toISOString().slice(0, 10); }
+function formatDate(d) {
+  if (!d) return '';
+  const dt = new Date(d);
+  return dt.toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' });
+}
+function formatTime(d) {
+  if (!d) return '';
+  return new Date(d).toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' });
+}
+
+/* =================================================================
+   IndexedDB — PHOTO STORAGE
+   ================================================================= */
+let photoDB = null;
+const DB_NAME = 'InventoryPhotos';
+const DB_VERSION = 1;
+const STORE_NAME = 'photos';
+
+function initPhotoDB() {
+  return new Promise((resolve, reject) => {
+    if (photoDB) { resolve(photoDB); return; }
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = e => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        db.createObjectStore(STORE_NAME, { keyPath: 'id' });
+      }
+    };
+    req.onsuccess = e => { photoDB = e.target.result; resolve(photoDB); };
+    req.onerror = e => { console.error('IndexedDB error:', e); reject(e); };
+  });
+}
+
+async function savePhoto(id, dataUrl) {
+  const db = await initPhotoDB();
+  // Convert data URL to blob for efficient storage
+  const resp = await fetch(dataUrl);
+  const blob = await resp.blob();
+  return new Promise((resolve, reject) => {
+    const txn = db.transaction(STORE_NAME, 'readwrite');
+    txn.objectStore(STORE_NAME).put({ id, blob, mimeType: blob.type, timestamp: Date.now() });
+    txn.oncomplete = () => resolve(id);
+    txn.onerror = e => reject(e);
+  });
+}
+
+async function getPhoto(id) {
+  if (!id) return null;
+  const db = await initPhotoDB();
+  return new Promise((resolve, reject) => {
+    const txn = db.transaction(STORE_NAME, 'readonly');
+    const req = txn.objectStore(STORE_NAME).get(id);
+    req.onsuccess = () => {
+      if (req.result && req.result.blob) {
+        resolve(URL.createObjectURL(req.result.blob));
+      } else {
+        resolve(null);
+      }
+    };
+    req.onerror = () => resolve(null);
+  });
+}
+
+async function getPhotoBlob(id) {
+  if (!id) return null;
+  const db = await initPhotoDB();
+  return new Promise((resolve) => {
+    const txn = db.transaction(STORE_NAME, 'readonly');
+    const req = txn.objectStore(STORE_NAME).get(id);
+    req.onsuccess = () => resolve(req.result ? req.result.blob : null);
+    req.onerror = () => resolve(null);
+  });
+}
+
+/* =================================================================
+   UI HELPERS
+   ================================================================= */
+function toast(msg, type = '') {
+  const c = document.getElementById('toastContainer');
+  const t = document.createElement('div');
+  t.className = 'toast ' + type;
+  t.textContent = msg;
+  c.appendChild(t);
+  requestAnimationFrame(() => t.classList.add('show'));
+  setTimeout(() => { t.classList.remove('show'); setTimeout(() => t.remove(), 300); }, 2500);
+}
+
+function openModal(html) {
+  document.getElementById('modalContent').innerHTML = html;
+  document.getElementById('modalOverlay').style.display = 'flex';
+}
+
+function closeModal() {
+  document.getElementById('modalOverlay').style.display = 'none';
+}
+
+function showConfirm(title, msg, onYes) {
+  openModal(`
+    <div class="modal-header"><h3>${title}</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <p style="margin-bottom:16px; font-size:0.9rem; color:var(--text-light);">${msg}</p>
+    <div style="display:flex; gap:8px;">
+      <button class="btn btn-outline" style="flex:1;" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-danger" style="flex:1;" id="confirmYesBtn">Confirm</button>
+    </div>
+  `);
+  document.getElementById('confirmYesBtn').onclick = () => { closeModal(); onYes(); };
+}
+
+function stockStatus(item) {
+  if (item.quantity <= 0) return { cls: 'badge-danger', label: 'Out of Stock' };
+  if (item.quantity <= (item.minStock || 5)) return { cls: 'badge-warning', label: 'Low Stock' };
+  if (item.maxStock && item.quantity >= item.maxStock) return { cls: 'badge-info', label: 'Full' };
+  return { cls: 'badge-success', label: 'OK' };
+}
+
+function viewPhoto(photoId) {
+  getPhoto(photoId).then(url => {
+    if (!url) { toast('Photo not available', 'warning'); return; }
+    const viewer = document.createElement('div');
+    viewer.className = 'photo-viewer';
+    viewer.innerHTML = `<img src="${url}">`;
+    viewer.onclick = () => { URL.revokeObjectURL(url); viewer.remove(); };
+    document.body.appendChild(viewer);
+  });
+}
+
+/* =================================================================
+   TAB NAVIGATION
+   ================================================================= */
+function switchTab(name) {
+  document.querySelectorAll('.tab-page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('page' + name).classList.add('active');
+  document.querySelectorAll('.tab-btn')[['Issue','Stock','History','Dashboard','Reports'].indexOf(name)].classList.add('active');
+
+  if (name === 'Issue') initIssueFlow();
+  if (name === 'Stock') renderInventory();
+  if (name === 'History') renderHistory();
+  if (name === 'Dashboard') renderDashboard();
+  if (name === 'Reports') initReports();
+}
+
+/* =================================================================
+   INVENTORY MANAGEMENT (Stock Tab)
+   ================================================================= */
+let selectedCat = 'All';
+
+function renderCategoryPills() {
+  const el = document.getElementById('catPills');
+  const cats = ['All', ...CATEGORIES];
+  el.innerHTML = cats.map(c =>
+    `<div class="cat-pill ${selectedCat === c ? 'active' : ''}" onclick="selectedCat='${c}'; renderCategoryPills(); renderInventory();">${c}</div>`
+  ).join('');
+}
+
+function renderInventory() {
+  const q = (document.getElementById('stockSearch')?.value || '').toLowerCase();
+  let items = getItems();
+  if (selectedCat !== 'All') items = items.filter(i => i.category === selectedCat);
+  if (q) items = items.filter(i => i.name.toLowerCase().includes(q) || (i.productCode || '').toLowerCase().includes(q));
+
+  const el = document.getElementById('stockList');
+  if (items.length === 0) {
+    el.innerHTML = '<div class="card" style="text-align:center; color:var(--text-light); padding:30px;">No items found. Add your first item!</div>';
+    return;
+  }
+
+  el.innerHTML = '<div class="card">' + items.map(i => {
+    const s = stockStatus(i);
+    return `<div class="inv-item">
+      <div class="inv-item-info">
+        <div class="inv-item-name">${i.name}</div>
+        <div class="inv-item-meta">${i.productCode ? i.productCode + ' &middot; ' : ''}${i.category} &middot; Min: ${i.minStock || 5} / Max: ${i.maxStock || 20}</div>
+      </div>
+      <div class="inv-item-qty">
+        <div class="qty-num" style="color:${s.cls === 'badge-danger' ? 'var(--danger)' : s.cls === 'badge-warning' ? 'var(--warning)' : 'var(--text)'};">${i.quantity}</div>
+        <div class="qty-unit">${i.unit || 'pcs'}</div>
+      </div>
+      <div class="inv-item-actions">
+        <button onclick="adjustQty('${i.id}', -1)" title="Decrease">-</button>
+        <button onclick="adjustQty('${i.id}', 1)" title="Increase">+</button>
+        <button onclick="openEditItemModal('${i.id}')" title="Edit" style="font-size:0.75rem;">&#9998;</button>
+      </div>
+    </div>`;
+  }).join('') + '</div>';
+  renderCategoryPills();
+}
+
+function adjustQty(id, delta) {
+  const items = getItems();
+  const idx = items.findIndex(i => i.id === id);
+  if (idx < 0) return;
+  items[idx].quantity = Math.max(0, items[idx].quantity + delta);
+  saveItems(items);
+  renderInventory();
+}
+
+function openAddItemModal() {
+  openModal(`
+    <div class="modal-header"><h3>Add New Item</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="form-group">
+      <label class="form-label">Item Name *</label>
+      <input class="form-control" id="addItemName" placeholder="e.g. Baby Wipes">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Category</label>
+      <select class="form-control" id="addItemCat">
+        ${CATEGORIES.map(c => `<option value="${c}">${c}</option>`).join('')}
+      </select>
+    </div>
+    <div style="display:flex; gap:8px;">
+      <div class="form-group" style="flex:1;">
+        <label class="form-label">Quantity</label>
+        <input type="number" class="form-control" id="addItemQty" value="0" min="0">
+      </div>
+      <div class="form-group" style="flex:1;">
+        <label class="form-label">Unit</label>
+        <select class="form-control" id="addItemUnit">
+          ${UNITS.map(u => `<option value="${u}">${u}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div style="display:flex; gap:8px;">
+      <div class="form-group" style="flex:1;">
+        <label class="form-label">Min Stock</label>
+        <input type="number" class="form-control" id="addItemMin" value="5" min="0">
+      </div>
+      <div class="form-group" style="flex:1;">
+        <label class="form-label">Max Stock</label>
+        <input type="number" class="form-control" id="addItemMax" value="20" min="0">
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Product Code (optional)</label>
+      <input class="form-control" id="addItemCode" placeholder="e.g. SKU-001">
+    </div>
+    <button class="btn btn-primary btn-block" onclick="addItem()">Add Item</button>
+  `);
+}
+
+function addItem() {
+  const name = document.getElementById('addItemName').value.trim();
+  if (!name) { toast('Please enter an item name', 'warning'); return; }
+  const items = getItems();
+  items.push({
+    id: uid(),
+    name,
+    category: document.getElementById('addItemCat').value,
+    quantity: parseInt(document.getElementById('addItemQty').value) || 0,
+    unit: document.getElementById('addItemUnit').value,
+    minStock: parseInt(document.getElementById('addItemMin').value) || 5,
+    maxStock: parseInt(document.getElementById('addItemMax').value) || 20,
+    productCode: document.getElementById('addItemCode').value.trim(),
+    dateAdded: new Date().toISOString()
+  });
+  saveItems(items);
+  closeModal();
+  renderInventory();
+  toast('Item added!', 'success');
+}
+
+function openEditItemModal(id) {
+  const items = getItems();
+  const i = items.find(x => x.id === id);
+  if (!i) return;
+  openModal(`
+    <div class="modal-header"><h3>Edit Item</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="form-group">
+      <label class="form-label">Item Name *</label>
+      <input class="form-control" id="editItemName" value="${i.name}">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Category</label>
+      <select class="form-control" id="editItemCat">
+        ${CATEGORIES.map(c => `<option value="${c}" ${c === i.category ? 'selected' : ''}>${c}</option>`).join('')}
+      </select>
+    </div>
+    <div style="display:flex; gap:8px;">
+      <div class="form-group" style="flex:1;">
+        <label class="form-label">Quantity</label>
+        <input type="number" class="form-control" id="editItemQty" value="${i.quantity}" min="0">
+      </div>
+      <div class="form-group" style="flex:1;">
+        <label class="form-label">Unit</label>
+        <select class="form-control" id="editItemUnit">
+          ${UNITS.map(u => `<option value="${u}" ${u === i.unit ? 'selected' : ''}>${u}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div style="display:flex; gap:8px;">
+      <div class="form-group" style="flex:1;">
+        <label class="form-label">Min Stock</label>
+        <input type="number" class="form-control" id="editItemMin" value="${i.minStock || 5}" min="0">
+      </div>
+      <div class="form-group" style="flex:1;">
+        <label class="form-label">Max Stock</label>
+        <input type="number" class="form-control" id="editItemMax" value="${i.maxStock || 20}" min="0">
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Product Code</label>
+      <input class="form-control" id="editItemCode" value="${i.productCode || ''}">
+    </div>
+    <button class="btn btn-primary btn-block" onclick="saveEditItem('${id}')" style="margin-bottom:8px;">Save Changes</button>
+    <button class="btn btn-danger btn-block" onclick="deleteItem('${id}')">Delete Item</button>
+  `);
+}
+
+function saveEditItem(id) {
+  const items = getItems();
+  const idx = items.findIndex(i => i.id === id);
+  if (idx < 0) return;
+  const name = document.getElementById('editItemName').value.trim();
+  if (!name) { toast('Name required', 'warning'); return; }
+  items[idx].name = name;
+  items[idx].category = document.getElementById('editItemCat').value;
+  items[idx].quantity = parseInt(document.getElementById('editItemQty').value) || 0;
+  items[idx].unit = document.getElementById('editItemUnit').value;
+  items[idx].minStock = parseInt(document.getElementById('editItemMin').value) || 5;
+  items[idx].maxStock = parseInt(document.getElementById('editItemMax').value) || 20;
+  items[idx].productCode = document.getElementById('editItemCode').value.trim();
+  saveItems(items);
+  closeModal();
+  renderInventory();
+  toast('Item updated!', 'success');
+}
+
+function deleteItem(id) {
+  closeModal();
+  showConfirm('Delete Item', 'Are you sure you want to delete this item? This cannot be undone.', () => {
+    const items = getItems().filter(i => i.id !== id);
+    saveItems(items);
+    renderInventory();
+    toast('Item deleted');
+  });
+}
+
+/* =================================================================
+   ISSUE FLOW
+   ================================================================= */
+let issueState = { step: 1, userName: '', userRoom: '', staffName: '', selectedItems: {}, photo: null, photoId: null, notes: '' };
+
+function initIssueFlow() {
+  issueState = { step: 1, userName: '', userRoom: '', staffName: '', selectedItems: {}, photo: null, photoId: null, notes: '' };
+  renderIssueStep();
+}
+
+function goToIssueStep2() {
+  const name = (document.getElementById('issueSuName')?.value || '').trim();
+  const room = (document.getElementById('issueSuRoom')?.value || '').trim();
+  const staff = (document.getElementById('issueStaffName')?.value || '').trim();
+  if (!name) { toast('Please enter a service user name', 'warning'); return; }
+  if (!room) { toast('Please enter a room number', 'warning'); return; }
+  if (!staff) { toast('Please enter staff name', 'warning'); return; }
+  issueState.userName = name;
+  issueState.userRoom = room;
+  issueState.staffName = staff;
+  issueState.notes = (document.getElementById('issueNotes')?.value || '').trim();
+  issueState.step = 2;
+  renderIssueStep();
+}
+
+function renderIssueStep() {
+  document.querySelectorAll('#issueSteps .step-dot').forEach((dot, i) => {
+    dot.className = 'step-dot';
+    if (i + 1 < issueState.step) dot.classList.add('done');
+    if (i + 1 === issueState.step) dot.classList.add('active');
+  });
+
+  const el = document.getElementById('issueFlow');
+  const items = getItems().filter(i => i.quantity > 0);
+
+  if (issueState.step === 1) {
+    el.innerHTML = `
+      <div class="card">
+        <div class="camera-zone ${issueState.photo ? 'has-photo' : ''}" id="cameraZone">
+          ${issueState.photo
+            ? `<img src="${issueState.photo}" alt="Photo">
+               <button class="retake-btn" onclick="event.stopPropagation(); issueState.photo=null; renderIssueStep();">Retake</button>`
+            : `<div class="camera-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg></div>
+               <div class="camera-label">Tap to take photo</div>`
+          }
+          <input type="file" accept="image/*" capture="environment" onchange="handleIssuePhoto(this)" ${issueState.photo ? 'style="display:none"' : ''}>
+        </div>
+        <div style="display:flex; gap:8px;">
+          <div class="form-group" style="flex:1;">
+            <label class="form-label">Room No. *</label>
+            <input class="form-control" id="issueSuRoom" placeholder="e.g. 204" value="${issueState.userRoom || ''}" style="font-size:1.1rem; font-weight:600; text-align:center;">
+          </div>
+          <div class="form-group" style="flex:2;">
+            <label class="form-label">Service User Name *</label>
+            <input class="form-control" id="issueSuName" placeholder="Service user name" value="${issueState.userName || ''}">
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Staff Name *</label>
+          <input class="form-control" id="issueStaffName" placeholder="Your name" value="${issueState.staffName || ''}">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Notes (optional)</label>
+          <textarea class="form-control" id="issueNotes" rows="2" placeholder="Any notes...">${issueState.notes || ''}</textarea>
+        </div>
+        <button class="btn btn-primary btn-block" onclick="goToIssueStep2()" style="font-size:1rem; padding:14px;">Next: Select Items</button>
+      </div>`;
+
+  } else if (issueState.step === 2) {
+    el.innerHTML = `
+      <div class="card" style="border-left:4px solid var(--primary);">
+        <h4>${issueState.userName}</h4>
+        <div style="font-size:0.82rem; color:var(--text-light);">Room ${issueState.userRoom} &middot; Staff: ${issueState.staffName}</div>
+        <button class="btn btn-outline btn-sm" style="margin-top:8px;" onclick="issueState.step=1; renderIssueStep();">Change</button>
+      </div>
+      <div class="card">
+        <h3 style="font-size:1rem; margin-bottom:12px;">Step 2: Select Items to Issue</h3>
+        <input class="form-control" id="issueItemSearch" placeholder="Search items..." oninput="filterIssueItems()" style="margin-bottom:10px;">
+        <div id="issueItemsList">
+          ${items.map(i => {
+            const checked = issueState.selectedItems[i.id] ? 'checked' : '';
+            const qty = issueState.selectedItems[i.id] || 1;
+            return `<div class="issue-item-row">
+              <input type="checkbox" class="issue-item-check" ${checked} onchange="toggleIssueItem('${i.id}', this.checked)">
+              <div class="issue-item-name">${i.name}</div>
+              <div class="issue-item-avail">(${i.quantity})</div>
+              <div class="qty-control">
+                <button onclick="changeIssueQty('${i.id}', -1)">-</button>
+                <input type="number" id="issueQty_${i.id}" value="${qty}" min="1" max="${i.quantity}" onchange="setIssueQty('${i.id}', this.value)">
+                <button onclick="changeIssueQty('${i.id}', 1)">+</button>
+              </div>
+            </div>`;
+          }).join('')}
+          ${items.length === 0 ? '<p style="color:var(--text-light); font-size:0.85rem;">No items in stock.</p>' : ''}
+        </div>
+      </div>
+      <button class="btn btn-primary btn-block" onclick="goToIssueStep3()" style="margin-top:8px;">Review & Confirm</button>`;
+
+  } else if (issueState.step === 3) {
+    const allItems = getItems();
+    const selectedList = Object.entries(issueState.selectedItems).map(([id, qty]) => {
+      const item = allItems.find(i => i.id === id);
+      return item ? { ...item, issueQty: qty } : null;
+    }).filter(Boolean);
+
+    el.innerHTML = `
+      <div class="card" style="border-left:4px solid var(--success);">
+        <h3 style="font-size:1rem; margin-bottom:12px;">Confirm Issue</h3>
+        <h4 style="margin-bottom:4px;">${issueState.userName}</h4>
+        <p style="font-size:0.82rem; color:var(--text-light); margin-bottom:4px;">Room ${issueState.userRoom}</p>
+        <p style="font-size:0.82rem; color:var(--primary); margin-bottom:12px;">Staff: ${issueState.staffName}</p>
+        <table style="width:100%; font-size:0.85rem; margin-bottom:12px;">
+          <tr style="border-bottom:1px solid var(--border);"><th style="text-align:left; padding:6px 0;">Item</th><th style="text-align:right; padding:6px 0;">Qty</th></tr>
+          ${selectedList.map(i => `<tr style="border-bottom:1px solid var(--border);"><td style="padding:6px 0;">${i.name}</td><td style="text-align:right; padding:6px 0;">${i.issueQty} ${i.unit || 'pcs'}</td></tr>`).join('')}
+        </table>
+        ${issueState.photo ? `<img src="${issueState.photo}" style="width:100%; max-height:150px; object-fit:cover; border-radius:8px; margin-bottom:8px;">` : ''}
+        ${issueState.notes ? `<p style="font-size:0.85rem; color:var(--text-light);">Notes: ${issueState.notes}</p>` : ''}
+      </div>
+      <button class="btn btn-success btn-block" onclick="confirmIssue()" style="margin-top:8px; font-size:1rem; padding:14px;">Confirm Issue</button>
+      <button class="btn btn-outline btn-block" onclick="issueState.step=2; renderIssueStep();" style="margin-top:8px;">Back</button>`;
+
+  } else if (issueState.step === 4) {
+    el.innerHTML = `
+      <div class="success-screen">
+        <div class="success-icon">&#9989;</div>
+        <h2 style="margin:16px 0 8px;">Items Issued Successfully</h2>
+        <p style="color:var(--text-light); margin-bottom:24px;">Stock has been updated and the transaction has been recorded.</p>
+        <button class="btn btn-primary btn-block" onclick="initIssueFlow()">Issue More Items</button>
+      </div>`;
+  }
+}
+
+function handleIssuePhoto(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    issueState.photo = e.target.result;
+    renderIssueStep();
+  };
+  reader.readAsDataURL(file);
+}
+
+function toggleIssueItem(id, checked) {
+  if (checked) {
+    const qtyInput = document.getElementById('issueQty_' + id);
+    issueState.selectedItems[id] = parseInt(qtyInput?.value) || 1;
+  } else {
+    delete issueState.selectedItems[id];
+  }
+}
+
+function changeIssueQty(id, delta) {
+  const input = document.getElementById('issueQty_' + id);
+  if (!input) return;
+  const max = parseInt(input.max) || 999;
+  let val = parseInt(input.value) || 1;
+  val = Math.max(1, Math.min(max, val + delta));
+  input.value = val;
+  if (issueState.selectedItems[id]) issueState.selectedItems[id] = val;
+}
+
+function setIssueQty(id, val) {
+  const v = Math.max(1, parseInt(val) || 1);
+  if (issueState.selectedItems[id]) issueState.selectedItems[id] = v;
+}
+
+function filterIssueItems() {
+  const q = (document.getElementById('issueItemSearch').value || '').toLowerCase();
+  const rows = document.querySelectorAll('#issueItemsList .issue-item-row');
+  rows.forEach(row => {
+    const name = row.querySelector('.issue-item-name')?.textContent.toLowerCase() || '';
+    row.style.display = name.includes(q) ? '' : 'none';
+  });
+}
+
+function goToIssueStep3() {
+  if (Object.keys(issueState.selectedItems).length === 0) {
+    toast('Please select at least one item', 'warning');
+    return;
+  }
+  issueState.step = 3;
+  renderIssueStep();
+}
+
+async function confirmIssue() {
+  const items = getItems();
+  const txnItems = [];
+
+  for (const [id, qty] of Object.entries(issueState.selectedItems)) {
+    const idx = items.findIndex(i => i.id === id);
+    if (idx < 0) continue;
+    const actualQty = Math.min(qty, items[idx].quantity);
+    if (actualQty <= 0) continue;
+    items[idx].quantity -= actualQty;
+    const item = items[idx];
+    txnItems.push({ itemId: id, name: item.name, qty: actualQty, unit: item.unit || 'pcs' });
+  }
+
+  if (txnItems.length === 0) {
+    toast('No items to issue', 'error');
+    return;
+  }
+
+  saveItems(items);
+
+  // Save photo to IndexedDB if present
+  let photoId = null;
+  if (issueState.photo) {
+    photoId = uid();
+    try {
+      await savePhoto(photoId, issueState.photo);
+    } catch(e) {
+      console.error('Photo save error:', e);
+      toast('Photo could not be saved', 'warning');
+      photoId = null;
+    }
+  }
+
+  const txn = {
+    id: uid(),
+    userName: issueState.userName,
+    userRoom: issueState.userRoom,
+    staffName: issueState.staffName,
+    items: txnItems,
+    photoId: photoId,
+    notes: issueState.notes,
+    date: new Date().toISOString()
+  };
+
+  const txns = getTransactions();
+  txns.push(txn);
+  saveTransactions(txns);
+
+  issueState.step = 4;
+  renderIssueStep();
+  toast('Items issued successfully!', 'success');
+}
+
+/* =================================================================
+   HISTORY
+   ================================================================= */
+function renderHistory() {
+  const q = (document.getElementById('historySearch')?.value || '').toLowerCase();
+  let txns = getTransactions().sort((a, b) => new Date(b.date) - new Date(a.date));
+  if (q) {
+    txns = txns.filter(t =>
+      (t.userName || '').toLowerCase().includes(q) ||
+      (t.userRoom || '').toLowerCase().includes(q) ||
+      (t.staffName || '').toLowerCase().includes(q) ||
+      t.items.some(i => i.name.toLowerCase().includes(q))
+    );
+  }
+
+  const el = document.getElementById('historyList');
+  if (txns.length === 0) {
+    el.innerHTML = '<div class="card" style="text-align:center; color:var(--text-light); padding:30px;">No transactions yet.</div>';
+    return;
+  }
+
+  el.innerHTML = txns.map(t => `
+    <div class="history-item">
+      <div class="history-header">
+        <div>
+          <div class="history-user">${t.userName} &middot; Room ${t.userRoom || '-'}</div>
+          <div class="history-staff">Staff: ${t.staffName || '-'}</div>
+        </div>
+        <div style="text-align:right;">
+          <div class="history-date">${formatDate(t.date)}</div>
+          <div class="history-date">${formatTime(t.date)}</div>
+        </div>
+      </div>
+      <div class="history-items">
+        ${t.items.map(i => `<div style="padding:2px 0;">&bull; ${i.name} &times;${i.qty}</div>`).join('')}
+      </div>
+      ${t.notes ? `<div style="font-size:0.78rem; color:var(--text-light); margin-top:4px;">Notes: ${t.notes}</div>` : ''}
+      ${t.photoId ? `<img class="history-photo" src="" data-photo-id="${t.photoId}" onclick="viewPhoto('${t.photoId}')">` : ''}
+    </div>
+  `).join('');
+
+  // Load photo thumbnails from IndexedDB
+  document.querySelectorAll('[data-photo-id]').forEach(img => {
+    getPhoto(img.dataset.photoId).then(url => {
+      if (url) img.src = url;
+      else img.style.display = 'none';
+    });
+  });
+}
+
+/* =================================================================
+   DASHBOARD
+   ================================================================= */
+let dashChart = null;
+
+function renderDashboard() {
+  const items = getItems();
+  const txns = getTransactions();
+  const todayStr = today();
+  const todayTxns = txns.filter(t => t.date.slice(0, 10) === todayStr);
+  const lowItems = items.filter(i => i.quantity > 0 && i.quantity <= (i.minStock || 5));
+  const outItems = items.filter(i => i.quantity <= 0);
+
+  // Stats
+  document.getElementById('dashStats').innerHTML = `
+    <div class="stats-grid">
+      <div class="stat-card"><div class="stat-value">${items.length}</div><div class="stat-label">Total Items</div></div>
+      <div class="stat-card"><div class="stat-value">${items.reduce((s, i) => s + i.quantity, 0)}</div><div class="stat-label">Total Stock</div></div>
+      <div class="stat-card"><div class="stat-value" style="color:${lowItems.length > 0 ? 'var(--warning)' : 'var(--success)'};">${lowItems.length}</div><div class="stat-label">Low Stock</div></div>
+      <div class="stat-card"><div class="stat-value">${todayTxns.length}</div><div class="stat-label">Today's Issues</div></div>
+    </div>`;
+
+  // Low stock alerts
+  const alertEl = document.getElementById('dashAlerts');
+  if (lowItems.length > 0 || outItems.length > 0) {
+    alertEl.innerHTML = `
+      <div class="alert-card" onclick="downloadLowStockReport()">
+        <h4>&#9888; ${lowItems.length + outItems.length} Stock Alerts</h4>
+        <p>${outItems.length} out of stock &middot; ${lowItems.length} low stock &mdash; Tap to download reorder report</p>
+      </div>`;
+  } else {
+    alertEl.innerHTML = '';
+  }
+
+  // Chart
+  const catCounts = {};
+  CATEGORIES.forEach(c => catCounts[c] = 0);
+  items.forEach(i => { if (catCounts[i.category] !== undefined) catCounts[i.category] += i.quantity; });
+  const usedCats = Object.entries(catCounts).filter(([,v]) => v > 0);
+
+  if (dashChart) dashChart.destroy();
+  const ctx = document.getElementById('dashChart').getContext('2d');
+  dashChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: usedCats.map(([k]) => k),
+      datasets: [{ label: 'Stock Qty', data: usedCats.map(([,v]) => v), backgroundColor: '#3b82f6', borderRadius: 6 }]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { display: false } },
+      scales: { y: { beginAtZero: true }, x: { ticks: { font: { size: 10 }, maxRotation: 45 } } }
+    }
+  });
+}
+
+function downloadLowStockReport() {
+  const items = getItems();
+  const reorderItems = items.filter(i => i.quantity <= (i.minStock || 5)).sort((a, b) => a.quantity - b.quantity);
+  if (reorderItems.length === 0) { toast('No items to reorder', 'warning'); return; }
+
+  const wb = XLSX.utils.book_new();
+
+  // Reorder sheet
+  const rows = [
+    ['REORDER LIST — Generated ' + new Date().toLocaleDateString('en-GB')],
+    ['Items below minimum stock level'],
+    [],
+    ['Item Name', 'Category', 'Current Qty', 'Min Stock', 'Max Stock', 'ORDER QTY', 'Unit']
+  ];
+  let total = 0;
+  reorderItems.forEach(i => {
+    const orderQty = (i.maxStock || 20) - i.quantity;
+    total += orderQty;
+    rows.push([i.name, i.category, i.quantity, i.minStock || 5, i.maxStock || 20, orderQty, i.unit || 'pcs']);
+  });
+  rows.push([]);
+  rows.push(['TOTAL TO ORDER', '', '', '', '', total, '']);
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = [{wch:35},{wch:15},{wch:12},{wch:12},{wch:12},{wch:12},{wch:10}];
+  XLSX.utils.book_append_sheet(wb, ws, 'Reorder List');
+
+  // Full inventory sheet
+  const invRows = [['Item Name', 'Category', 'Current Qty', 'Unit', 'Min Stock', 'Max Stock', 'Status']];
+  items.forEach(i => {
+    const s = stockStatus(i);
+    invRows.push([i.name, i.category, i.quantity, i.unit || 'pcs', i.minStock || 5, i.maxStock || 20, s.label]);
+  });
+  const ws2 = XLSX.utils.aoa_to_sheet(invRows);
+  ws2['!cols'] = [{wch:35},{wch:15},{wch:12},{wch:10},{wch:12},{wch:12},{wch:12}];
+  XLSX.utils.book_append_sheet(wb, ws2, 'Full Inventory');
+
+  XLSX.writeFile(wb, `Reorder_Report_${today()}.xlsx`);
+  toast('Reorder report downloaded!', 'success');
+}
+
+/* =================================================================
+   REPORTS
+   ================================================================= */
+function initReports() {
+  const settings = getSettings();
+  document.getElementById('fridayToggle').checked = settings.fridayAutoReport || false;
+  if (!document.getElementById('reportFrom').value) {
+    const d = new Date(); d.setDate(d.getDate() - 7);
+    document.getElementById('reportFrom').value = d.toISOString().slice(0, 10);
+    document.getElementById('reportTo').value = today();
+  }
+  checkFridayReport();
+}
+
+function checkFridayReport() {
+  const settings = getSettings();
+  const banner = document.getElementById('fridayBanner');
+  const now = new Date();
+  const isFriday = now.getDay() === 5;
+
+  if (settings.fridayAutoReport && isFriday) {
+    const lastReport = load(KEYS.fridayReport);
+    if (lastReport !== today()) {
+      banner.innerHTML = `<div class="friday-banner">&#128197; It's Friday! Auto-generating weekly report...<button class="btn btn-sm btn-warning" onclick="autoFridayReport()" style="margin-left:auto;">Download Now</button></div>`;
+      autoFridayReport();
+    } else {
+      banner.innerHTML = `<div class="friday-banner">&#9989; Friday report already generated today.</div>`;
+    }
+  } else if (settings.fridayAutoReport) {
+    banner.innerHTML = `<div class="friday-banner">&#128197; Auto Friday Report enabled. Reports generate every Friday.</div>`;
+  } else {
+    banner.innerHTML = '';
+  }
+}
+
+function toggleFridayReport() {
+  const settings = getSettings();
+  settings.fridayAutoReport = document.getElementById('fridayToggle').checked;
+  saveSettings(settings);
+  checkFridayReport();
+  toast(settings.fridayAutoReport ? 'Friday auto-report enabled' : 'Friday auto-report disabled');
+}
+
+function autoFridayReport() {
+  const to = today();
+  const d = new Date(); d.setDate(d.getDate() - 7);
+  const from = d.toISOString().slice(0, 10);
+  document.getElementById('reportFrom').value = from;
+  document.getElementById('reportTo').value = to;
+  generateReport();
+  downloadExcelReport();
+  save(KEYS.fridayReport, today());
+  checkFridayReport();
+}
+
+function generateReport() {
+  const from = document.getElementById('reportFrom').value;
+  const to = document.getElementById('reportTo').value;
+  if (!from || !to) { toast('Please select date range', 'warning'); return; }
+
+  const txns = getTransactions().filter(t => {
+    const d = t.date.slice(0, 10);
+    return d >= from && d <= to;
+  });
+
+  const totalItems = txns.reduce((s, t) => s + t.items.reduce((a, i) => a + i.qty, 0), 0);
+
+  document.getElementById('reportSummary').innerHTML = `
+    <div class="stats-grid" style="margin-top:12px;">
+      <div class="stat-card"><div class="stat-value">${txns.length}</div><div class="stat-label">Transactions</div></div>
+      <div class="stat-card"><div class="stat-value">${totalItems}</div><div class="stat-label">Items Issued</div></div>
+    </div>`;
+
+  if (txns.length === 0) {
+    document.getElementById('reportTable').innerHTML = '<div class="card"><div style="text-align:center; color:var(--text-light); padding:20px;">No transactions in this period.</div></div>';
+    return;
+  }
+
+  // Build rows — one row per item issued
+  const reportRows = [];
+  txns.sort((a, b) => new Date(b.date) - new Date(a.date)).forEach(t => {
+    t.items.forEach(i => {
+      reportRows.push({ date: t.date, userName: t.userName, room: t.userRoom, staffName: t.staffName, itemName: i.name, qty: i.qty, unit: i.unit || 'pcs' });
+    });
+  });
+
+  document.getElementById('reportTable').innerHTML = `<div class="card"><div class="table-wrapper"><table class="report-table">
+    <thead><tr><th>Date</th><th>Time</th><th>Staff</th><th>User</th><th>Room</th><th>Item</th><th>Qty</th></tr></thead>
+    <tbody>${reportRows.map(r => {
+      const dt = new Date(r.date);
+      return `<tr>
+        <td>${dt.toLocaleDateString('en-GB', {day:'2-digit',month:'short',year:'numeric'})}</td>
+        <td>${dt.toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit'})}</td>
+        <td>${r.staffName || '-'}</td>
+        <td>${r.userName}</td>
+        <td>${r.room || '-'}</td>
+        <td>${r.itemName}</td>
+        <td>${r.qty}</td>
+      </tr>`;
+    }).join('')}</tbody>
+  </table></div></div>`;
+}
+
+function downloadExcelReport() {
+  const from = document.getElementById('reportFrom').value;
+  const to = document.getElementById('reportTo').value;
+  if (!from || !to) { toast('Please select date range', 'warning'); return; }
+
+  const txns = getTransactions().filter(t => {
+    const d = t.date.slice(0, 10);
+    return d >= from && d <= to;
+  });
+  const items = getItems();
+  const totalItems = txns.reduce((s, t) => s + t.items.reduce((a, i) => a + i.qty, 0), 0);
+
+  const wb = XLSX.utils.book_new();
+
+  // Sheet 1: Summary
+  const summaryData = [
+    ['Inventory Report'],
+    ['Period', `${from} to ${to}`],
+    ['Generated', new Date().toLocaleString()],
+    [],
+    ['Total Transactions', txns.length],
+    ['Total Items Issued', totalItems],
+    ['Total Items in Inventory', items.length],
+    ['Total Stock Units', items.reduce((s, i) => s + i.quantity, 0)],
+    ['Low Stock Items', items.filter(i => i.quantity > 0 && i.quantity <= (i.minStock || 5)).length],
+    ['Out of Stock Items', items.filter(i => i.quantity <= 0).length],
+    [],
+    ['--- REORDER SUMMARY ---'],
+    ['Items Needing Reorder', items.filter(i => i.quantity <= (i.minStock || 5)).length],
+    ['Total Units to Order', items.filter(i => i.quantity <= (i.minStock || 5)).reduce((s, i) => s + ((i.maxStock || 20) - i.quantity), 0)],
+  ];
+  const ws1 = XLSX.utils.aoa_to_sheet(summaryData);
+  XLSX.utils.book_append_sheet(wb, ws1, 'Summary');
+
+  // Sheet 2: Transactions — one row per item issued
+  const txnRows = [['Date', 'Time', 'Staff', 'Service User', 'Room', 'Product Code', 'Item Name', 'Quantity', 'Unit', 'Notes']];
+  const allItems = getItems();
+  txns.forEach(t => {
+    const txnDate = new Date(t.date);
+    const dateStr = txnDate.toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' });
+    const timeStr = txnDate.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' });
+    t.items.forEach(i => {
+      const invItem = allItems.find(x => x.id === i.itemId);
+      txnRows.push([
+        dateStr, timeStr, t.staffName || '', t.userName, t.userRoom || '',
+        invItem?.productCode || '', i.name, i.qty, i.unit || 'pcs', t.notes || ''
+      ]);
+    });
+  });
+  const ws2 = XLSX.utils.aoa_to_sheet(txnRows);
+  ws2['!cols'] = [{wch:12},{wch:8},{wch:16},{wch:20},{wch:8},{wch:14},{wch:35},{wch:10},{wch:8},{wch:20}];
+  XLSX.utils.book_append_sheet(wb, ws2, 'Transactions');
+
+  // Sheet 3: Current Inventory
+  const invRows = [['Item Name', 'Category', 'Current Qty', 'Unit', 'Min Stock', 'Max Stock', 'Status']];
+  items.forEach(i => {
+    const s = stockStatus(i);
+    invRows.push([i.name, i.category, i.quantity, i.unit || 'pcs', i.minStock || 5, i.maxStock || 20, s.label]);
+  });
+  const ws3 = XLSX.utils.aoa_to_sheet(invRows);
+  ws3['!cols'] = [{wch:35},{wch:15},{wch:12},{wch:10},{wch:12},{wch:12},{wch:12}];
+  XLSX.utils.book_append_sheet(wb, ws3, 'Inventory');
+
+  // Sheet 4: Reorder List
+  const reorderRows = [
+    ['REORDER LIST — Generated ' + new Date().toLocaleDateString('en-GB')],
+    ['Items below minimum stock level — order up to Max Stock'],
+    [],
+    ['Item Name', 'Category', 'Current Qty', 'Min Stock', 'Max Stock', 'ORDER QTY', 'Unit']
+  ];
+  const reorderItems = items.filter(i => i.quantity <= (i.minStock || 5)).sort((a, b) => a.quantity - b.quantity);
+  let totalToOrder = 0;
+  reorderItems.forEach(i => {
+    const orderQty = (i.maxStock || 20) - i.quantity;
+    totalToOrder += orderQty;
+    reorderRows.push([i.name, i.category, i.quantity, i.minStock || 5, i.maxStock || 20, orderQty, i.unit || 'pcs']);
+  });
+  reorderRows.push([]);
+  reorderRows.push(['TOTAL TO ORDER', '', '', '', '', totalToOrder, '']);
+  const ws4 = XLSX.utils.aoa_to_sheet(reorderRows);
+  ws4['!cols'] = [{wch:35},{wch:15},{wch:12},{wch:12},{wch:12},{wch:12},{wch:10}];
+  XLSX.utils.book_append_sheet(wb, ws4, 'Reorder List');
+
+  XLSX.writeFile(wb, `Inventory_Report_${from}_to_${to}.xlsx`);
+  toast('Excel report downloaded!', 'success');
+}
+
+/* =================================================================
+   INITIALIZATION
+   ================================================================= */
+function init() {
+  initPhotoDB();
+  initIssueFlow();
+  renderCategoryPills();
+}
+
+document.addEventListener('DOMContentLoaded', init);
+
+/* =================================================================
+   PWA — Service Worker
+   ================================================================= */
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('./sw.js')
+    .then(reg => console.log('SW registered:', reg.scope))
+    .catch(err => console.log('SW failed:', err));
+}
+</script>
+</body>
+</html>
