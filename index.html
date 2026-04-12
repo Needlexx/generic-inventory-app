@@ -625,45 +625,47 @@ function openSheetsSetup() {
 }
 
 function getAppsScriptCode() {
-  return \`function doPost(e) {
-  var sheet = SpreadsheetApp.getActiveSpreadsheet();
-  var data = JSON.parse(e.postData.contents);
-
-  if (data.action === 'transaction') {
-    var txnSheet = sheet.getSheetByName('Transactions');
-    if (!txnSheet) {
-      txnSheet = sheet.insertSheet('Transactions');
-      txnSheet.appendRow(['Date','Time','Staff','Service User','Room','Product Code','Item Name','Quantity','Unit','Current Stock','Notes']);
-      txnSheet.getRange(1,1,1,11).setFontWeight('bold').setBackground('#2563eb').setFontColor('white');
-      txnSheet.setFrozenRows(1);
-    }
-    var p = data.payload;
-    txnSheet.appendRow([p.date, p.time, p.staff, p.serviceUser, p.room, p.productCode, p.itemName, p.quantity, p.unit, p.currentStock, p.notes]);
-  }
-
-  if (data.action === 'inventory') {
-    var invSheet = sheet.getSheetByName('Live Stock');
-    if (!invSheet) {
-      invSheet = sheet.insertSheet('Live Stock');
-    }
-    invSheet.clear();
-    invSheet.appendRow(['Item Name','Category','Current Qty','Unit','Min Stock','Max Stock','Product Code','Status']);
-    invSheet.getRange(1,1,1,8).setFontWeight('bold').setBackground('#2563eb').setFontColor('white');
-    invSheet.setFrozenRows(1);
-    var items = data.payload.items;
-    for (var i = 0; i < items.length; i++) {
-      var it = items[i];
-      invSheet.appendRow([it.name, it.category, it.quantity, it.unit, it.minStock, it.maxStock, it.productCode, it.status]);
-    }
-    invSheet.autoResizeColumns(1, 8);
-  }
-
-  return ContentService.createTextOutput(JSON.stringify({status:'ok'})).setMimeType(ContentService.MimeType.JSON);
-}
-
-function doGet(e) {
-  return ContentService.createTextOutput('Inventory Sync Active').setMimeType(ContentService.MimeType.TEXT);
-}\`;
+  return [
+    "function doPost(e) {",
+    "  var sheet = SpreadsheetApp.getActiveSpreadsheet();",
+    "  var data = JSON.parse(e.postData.contents);",
+    "",
+    "  if (data.action === 'transaction') {",
+    "    var txnSheet = sheet.getSheetByName('Transactions');",
+    "    if (!txnSheet) {",
+    "      txnSheet = sheet.insertSheet('Transactions');",
+    "      txnSheet.appendRow(['Date','Time','Staff','Service User','Room','Product Code','Item Name','Quantity','Unit','Current Stock','Notes']);",
+    "      txnSheet.getRange(1,1,1,11).setFontWeight('bold').setBackground('#2563eb').setFontColor('white');",
+    "      txnSheet.setFrozenRows(1);",
+    "    }",
+    "    var p = data.payload;",
+    "    txnSheet.appendRow([p.date, p.time, p.staff, p.serviceUser, p.room, p.productCode, p.itemName, p.quantity, p.unit, p.currentStock, p.notes]);",
+    "  }",
+    "",
+    "  if (data.action === 'inventory') {",
+    "    var invSheet = sheet.getSheetByName('Live Stock');",
+    "    if (!invSheet) {",
+    "      invSheet = sheet.insertSheet('Live Stock');",
+    "    }",
+    "    invSheet.clear();",
+    "    invSheet.appendRow(['Item Name','Category','Current Qty','Unit','Min Stock','Max Stock','Product Code','Status']);",
+    "    invSheet.getRange(1,1,1,8).setFontWeight('bold').setBackground('#2563eb').setFontColor('white');",
+    "    invSheet.setFrozenRows(1);",
+    "    var items = data.payload.items;",
+    "    for (var i = 0; i < items.length; i++) {",
+    "      var it = items[i];",
+    "      invSheet.appendRow([it.name, it.category, it.quantity, it.unit, it.minStock, it.maxStock, it.productCode, it.status]);",
+    "    }",
+    "    invSheet.autoResizeColumns(1, 8);",
+    "  }",
+    "",
+    "  return ContentService.createTextOutput(JSON.stringify({status:'ok'})).setMimeType(ContentService.MimeType.JSON);",
+    "}",
+    "",
+    "function doGet(e) {",
+    "  return ContentService.createTextOutput('Inventory Sync Active').setMimeType(ContentService.MimeType.TEXT);",
+    "}"
+  ].join('\n');
 }
 
 function copyScriptCode() {
