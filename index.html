@@ -308,7 +308,11 @@ select.form-control { appearance: none; background-image: url("data:image/svg+xm
     <div class="header-logo">&#128230;</div>
     <h1 id="orgNameHeader">Inventory Manager</h1>
   </div>
-  <div style="display:flex; gap:8px;">
+  <div style="display:flex; align-items:center; gap:8px;">
+    <div id="saveStatus" style="display:flex; align-items:center; gap:4px; font-size:0.7rem; color:rgba(255,255,255,0.7); transition:all 0.3s;">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+      <span>Saved</span>
+    </div>
     <button style="background:rgba(255,255,255,0.2); border:none; border-radius:8px; padding:8px; cursor:pointer; color:white;" onclick="openBackupModal()" title="Backup & Restore">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
     </button>
@@ -426,13 +430,92 @@ const CATEGORIES = ['Baby Food','Baby Formula','Baby Equipment','Baby Care','Nap
 const UNITS = ['pcs','jars','bottles','boxes','packs','tins','tubes','rolls','pairs','kg','litres','sheets','sets'];
 
 function load(key) { try { return JSON.parse(localStorage.getItem(key)); } catch { return null; } }
-function save(key, data) { localStorage.setItem(key, JSON.stringify(data)); }
+function save(key, data) {
+  localStorage.setItem(key, JSON.stringify(data));
+  showSaveStatus();
+  // Also mirror to IndexedDB for durability
+  mirrorToIndexedDB(key, data);
+}
 function getItems() { return load(KEYS.items) || []; }
 function saveItems(items) { save(KEYS.items, items); }
 function getTransactions() { return load(KEYS.transactions) || []; }
 function saveTransactions(txns) { save(KEYS.transactions, txns); }
 function getSettings() { return load(KEYS.settings) || { fridayAutoReport: false }; }
 function saveSettings(s) { save(KEYS.settings, s); }
+
+/* === Save Status Indicator === */
+let saveTimeout = null;
+function showSaveStatus() {
+  const el = document.getElementById('saveStatus');
+  if (!el) return;
+  el.style.color = 'rgba(255,255,255,1)';
+  el.querySelector('span').textContent = 'Saving...';
+  el.querySelector('svg').style.stroke = '#fbbf24';
+  clearTimeout(saveTimeout);
+  saveTimeout = setTimeout(() => {
+    el.querySelector('span').textContent = 'Saved';
+    el.querySelector('svg').style.stroke = '#22c55e';
+    el.style.color = 'rgba(255,255,255,0.8)';
+  }, 500);
+}
+
+/* === Persistent Storage — ask browser to never delete data === */
+async function requestPersistentStorage() {
+  if (navigator.storage && navigator.storage.persist) {
+    const granted = await navigator.storage.persist();
+    if (granted) {
+      console.log('Persistent storage granted — data will NOT be auto-deleted');
+    } else {
+      console.log('Persistent storage denied — data may be cleared under pressure');
+    }
+  }
+  // Show storage estimate
+  if (navigator.storage && navigator.storage.estimate) {
+    const est = await navigator.storage.estimate();
+    const usedMB = (est.usage / 1024 / 1024).toFixed(1);
+    const quotaMB = (est.quota / 1024 / 1024).toFixed(0);
+    console.log(`Storage: ${usedMB} MB used of ${quotaMB} MB available`);
+  }
+}
+
+/* === Mirror data to IndexedDB for extra durability === */
+async function mirrorToIndexedDB(key, data) {
+  try {
+    const db = await initPhotoDB();
+    const txn = db.transaction('data_mirror', 'readwrite');
+    txn.objectStore('data_mirror').put({ id: key, data, updatedAt: Date.now() });
+  } catch(e) {
+    // data_mirror store might not exist yet, that's ok
+  }
+}
+
+/* === Recover data from IndexedDB if localStorage is empty === */
+async function recoverFromIndexedDB() {
+  try {
+    const db = await initPhotoDB();
+    const txn = db.transaction('data_mirror', 'readonly');
+    const store = txn.objectStore('data_mirror');
+
+    for (const key of Object.values(KEYS)) {
+      const localData = localStorage.getItem(key);
+      if (!localData || localData === 'null') {
+        const req = store.get(key);
+        await new Promise((resolve) => {
+          req.onsuccess = () => {
+            if (req.result && req.result.data) {
+              localStorage.setItem(key, JSON.stringify(req.result.data));
+              console.log('Recovered from IndexedDB:', key);
+            }
+            resolve();
+          };
+          req.onerror = () => resolve();
+        });
+      }
+    }
+  } catch(e) {
+    // data_mirror store might not exist yet
+  }
+}
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
 function today() { return new Date().toISOString().slice(0, 10); }
 function formatDate(d) {
@@ -449,8 +532,8 @@ function formatTime(d) {
    IndexedDB — PHOTO STORAGE
    ================================================================= */
 let photoDB = null;
-const DB_NAME = 'InventoryPhotos';
-const DB_VERSION = 1;
+const DB_NAME = 'InventoryAppDB';
+const DB_VERSION = 2;
 const STORE_NAME = 'photos';
 
 function initPhotoDB() {
@@ -459,8 +542,13 @@ function initPhotoDB() {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
     req.onupgradeneeded = e => {
       const db = e.target.result;
+      // Store for photos (binary blobs)
       if (!db.objectStoreNames.contains(STORE_NAME)) {
         db.createObjectStore(STORE_NAME, { keyPath: 'id' });
+      }
+      // Store for mirroring localStorage data (auto-recovery)
+      if (!db.objectStoreNames.contains('data_mirror')) {
+        db.createObjectStore('data_mirror', { keyPath: 'id' });
       }
     };
     req.onsuccess = e => { photoDB = e.target.result; resolve(photoDB); };
@@ -1491,10 +1579,30 @@ async function importFullBackup(input) {
 /* =================================================================
    INITIALIZATION
    ================================================================= */
-function init() {
-  initPhotoDB();
+async function init() {
+  // Initialize IndexedDB (photos + data mirror)
+  await initPhotoDB();
+
+  // Request persistent storage so browser never auto-deletes our data
+  await requestPersistentStorage();
+
+  // Recover data from IndexedDB if localStorage was cleared
+  await recoverFromIndexedDB();
+
+  // Initialize UI
   initIssueFlow();
   renderCategoryPills();
+
+  // Show saved status
+  const items = getItems();
+  const txns = getTransactions();
+  if (items.length > 0 || txns.length > 0) {
+    const el = document.getElementById('saveStatus');
+    if (el) {
+      el.querySelector('svg').style.stroke = '#22c55e';
+      el.style.color = 'rgba(255,255,255,0.8)';
+    }
+  }
 }
 
 document.addEventListener('DOMContentLoaded', init);
