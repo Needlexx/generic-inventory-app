@@ -261,6 +261,18 @@ select.form-control { appearance: none; background-image: url("data:image/svg+xm
 .history-staff { font-size: 0.78rem; color: var(--primary); margin-bottom: 6px; }
 .history-items { font-size: 0.82rem; color: var(--text); }
 .history-photo { width: 60px; height: 60px; border-radius: 8px; object-fit: cover; cursor: pointer; margin-top: 6px; }
+.history-badge {
+  display: inline-block; font-size: 0.65rem; font-weight: 700;
+  color: white; border-radius: 4px; padding: 2px 6px; letter-spacing: 0.03em; flex-shrink: 0;
+}
+.history-filter-pills { display: flex; gap: 6px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.history-filter-pill {
+  flex-shrink: 0; padding: 5px 14px; border-radius: 20px;
+  font-size: 0.78rem; font-weight: 600; cursor: pointer;
+  border: 1.5px solid var(--border); background: white; color: var(--text-light);
+  transition: all 0.15s;
+}
+.history-filter-pill.active { background: var(--primary); color: white; border-color: var(--primary); }
 
 /* ========== SUCCESS SCREEN ========== */
 .success-screen { text-align: center; padding: 40px 16px; }
@@ -352,7 +364,12 @@ select.form-control { appearance: none; background-image: url("data:image/svg+xm
   <!-- === HISTORY TAB === -->
   <div class="tab-page" id="pageHistory">
     <div class="card" style="padding:10px 12px;">
-      <input class="form-control" id="historySearch" placeholder="Search by name, room, staff..." oninput="renderHistory()">
+      <input class="form-control" id="historySearch" placeholder="Search by name, room, staff..." oninput="renderHistory()" style="margin-bottom:8px;">
+      <div class="history-filter-pills">
+        <button class="history-filter-pill active" onclick="setHistoryFilter('all')">All</button>
+        <button class="history-filter-pill" onclick="setHistoryFilter('issues')">Issues</button>
+        <button class="history-filter-pill" onclick="setHistoryFilter('stock')">Stock Changes</button>
+      </div>
     </div>
     <div id="historyList"></div>
   </div>
@@ -430,7 +447,7 @@ select.form-control { appearance: none; background-image: url("data:image/svg+xm
 /* =================================================================
    DATA LAYER
    ================================================================= */
-const KEYS = { items: 'inv_items', transactions: 'inv_transactions', settings: 'inv_settings', fridayReport: 'inv_friday_report', role: 'inv_role' };
+const KEYS = { items: 'inv_items', transactions: 'inv_transactions', settings: 'inv_settings', fridayReport: 'inv_friday_report', role: 'inv_role', stockHistory: 'inv_stock_history' };
 
 /* =================================================================
    USER ROLES & PERMISSIONS
@@ -509,6 +526,14 @@ function getTransactions() { return load(KEYS.transactions) || []; }
 function saveTransactions(txns) { save(KEYS.transactions, txns); }
 function getSettings() { return load(KEYS.settings) || { fridayAutoReport: false }; }
 function saveSettings(s) { save(KEYS.settings, s); }
+function getStockHistory() { return load(KEYS.stockHistory) || []; }
+function saveStockHistory(events) { save(KEYS.stockHistory, events); }
+
+function recordStockEvent(type, data) {
+  const events = getStockHistory();
+  events.push({ id: uid(), type, date: new Date().toISOString(), role: getRole() || 'Unknown', ...data });
+  saveStockHistory(events);
+}
 
 /* === Save Status Indicator === */
 let saveTimeout = null;
@@ -1101,7 +1126,9 @@ function addItem() {
     productCode: document.getElementById('addItemCode').value.trim(),
     dateAdded: new Date().toISOString()
   });
+  const newItem = items[items.length - 1];
   saveItems(items);
+  recordStockEvent('add_item', { itemId: newItem.id, itemName: newItem.name, newQty: newItem.quantity, unit: newItem.unit });
   syncInventory();
   closeModal();
   renderInventory();
@@ -1163,6 +1190,7 @@ function saveEditItem(id) {
   if (idx < 0) return;
   const name = document.getElementById('editItemName').value.trim();
   if (!name) { toast('Name required', 'warning'); return; }
+  const oldQty = items[idx].quantity;
   items[idx].name = name;
   items[idx].category = document.getElementById('editItemCat').value;
   items[idx].quantity = parseInt(document.getElementById('editItemQty').value) || 0;
@@ -1171,6 +1199,9 @@ function saveEditItem(id) {
   items[idx].maxStock = parseInt(document.getElementById('editItemMax').value) || 20;
   items[idx].productCode = document.getElementById('editItemCode').value.trim();
   saveItems(items);
+  if (items[idx].quantity !== oldQty) {
+    recordStockEvent('adjust_qty', { itemId: id, itemName: name, oldQty, newQty: items[idx].quantity, unit: items[idx].unit });
+  }
   syncInventory();
   closeModal();
   renderInventory();
@@ -1180,9 +1211,13 @@ function saveEditItem(id) {
 function deleteItem(id) {
   if (!canDeleteItem()) { denyPermission(); return; }
   closeModal();
+  const itemToDelete = getItems().find(i => i.id === id);
   showConfirm('Delete Item', 'Are you sure you want to delete this item? This cannot be undone.', () => {
     const items = getItems().filter(i => i.id !== id);
     saveItems(items);
+    if (itemToDelete) {
+      recordStockEvent('delete_item', { itemId: id, itemName: itemToDelete.name, oldQty: itemToDelete.quantity, unit: itemToDelete.unit });
+    }
     syncInventory();
     renderInventory();
     toast('Item deleted');
@@ -1434,43 +1469,115 @@ async function confirmIssue() {
 /* =================================================================
    HISTORY
    ================================================================= */
+let historyFilter = 'all';
+
+function setHistoryFilter(f) {
+  historyFilter = f;
+  document.querySelectorAll('.history-filter-pill').forEach(b => b.classList.remove('active'));
+  const pills = document.querySelectorAll('.history-filter-pill');
+  const idx = ['all', 'issues', 'stock'].indexOf(f);
+  if (pills[idx]) pills[idx].classList.add('active');
+  renderHistory();
+}
+
 function renderHistory() {
   const q = (document.getElementById('historySearch')?.value || '').toLowerCase();
-  let txns = getTransactions().sort((a, b) => new Date(b.date) - new Date(a.date));
+
+  // Build unified event list
+  let events = [];
+
+  if (historyFilter !== 'stock') {
+    const txns = getTransactions().map(t => ({ ...t, _kind: 'issue' }));
+    events = events.concat(txns);
+  }
+
+  if (historyFilter !== 'issues') {
+    const stockEvts = getStockHistory().map(e => ({ ...e, _kind: 'stock' }));
+    events = events.concat(stockEvts);
+  }
+
+  // Sort newest first
+  events.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+  // Search filter
   if (q) {
-    txns = txns.filter(t =>
-      (t.userName || '').toLowerCase().includes(q) ||
-      (t.userRoom || '').toLowerCase().includes(q) ||
-      (t.staffName || '').toLowerCase().includes(q) ||
-      t.items.some(i => i.name.toLowerCase().includes(q))
-    );
+    events = events.filter(e => {
+      if (e._kind === 'issue') {
+        return (e.userName || '').toLowerCase().includes(q) ||
+          (e.userRoom || '').toLowerCase().includes(q) ||
+          (e.staffName || '').toLowerCase().includes(q) ||
+          (e.items || []).some(i => i.name.toLowerCase().includes(q));
+      } else {
+        return (e.itemName || '').toLowerCase().includes(q) ||
+          (e.role || '').toLowerCase().includes(q);
+      }
+    });
   }
 
   const el = document.getElementById('historyList');
-  if (txns.length === 0) {
-    el.innerHTML = '<div class="card" style="text-align:center; color:var(--text-light); padding:30px;">No transactions yet.</div>';
+  if (events.length === 0) {
+    el.innerHTML = '<div class="card" style="text-align:center; color:var(--text-light); padding:30px;">No history yet.</div>';
     return;
   }
 
-  el.innerHTML = txns.map(t => `
-    <div class="history-item">
-      <div class="history-header">
-        <div>
-          <div class="history-user">${t.userName} &middot; Room ${t.userRoom || '-'}</div>
-          <div class="history-staff">Staff: ${t.staffName || '-'}</div>
-        </div>
-        <div style="text-align:right;">
-          <div class="history-date">${formatDate(t.date)}</div>
-          <div class="history-date">${formatTime(t.date)}</div>
-        </div>
-      </div>
-      <div class="history-items">
-        ${t.items.map(i => `<div style="padding:2px 0;">&bull; ${i.name} &times;${i.qty}</div>`).join('')}
-      </div>
-      ${t.notes ? `<div style="font-size:0.78rem; color:var(--text-light); margin-top:4px;">Notes: ${t.notes}</div>` : ''}
-      ${t.photoId ? `<img class="history-photo" src="" data-photo-id="${t.photoId}" onclick="viewPhoto('${t.photoId}')">` : ''}
-    </div>
-  `).join('');
+  const stockLabels = { add_item: 'Item Added', adjust_qty: 'Qty Adjusted', delete_item: 'Item Deleted' };
+  const stockColors = { add_item: 'var(--success)', adjust_qty: 'var(--primary)', delete_item: 'var(--danger)' };
+
+  el.innerHTML = events.map(e => {
+    if (e._kind === 'issue') {
+      return `
+        <div class="history-item">
+          <div class="history-header">
+            <div>
+              <div style="display:flex;align-items:center;gap:6px;">
+                <span class="history-badge" style="background:var(--primary);">Issue</span>
+                <span class="history-user">${e.userName} &middot; Room ${e.userRoom || '-'}</span>
+              </div>
+              <div class="history-staff">Staff: ${e.staffName || '-'}</div>
+            </div>
+            <div style="text-align:right;">
+              <div class="history-date">${formatDate(e.date)}</div>
+              <div class="history-date">${formatTime(e.date)}</div>
+            </div>
+          </div>
+          <div class="history-items">
+            ${(e.items || []).map(i => `<div style="padding:2px 0;">&bull; ${i.name} &times;${i.qty}</div>`).join('')}
+          </div>
+          ${e.notes ? `<div style="font-size:0.78rem; color:var(--text-light); margin-top:4px;">Notes: ${e.notes}</div>` : ''}
+          ${e.photoId ? `<img class="history-photo" src="" data-photo-id="${e.photoId}" onclick="viewPhoto('${e.photoId}')">` : ''}
+        </div>`;
+    } else {
+      const label = stockLabels[e.type] || e.type;
+      const color = stockColors[e.type] || 'var(--text-light)';
+      let detail = '';
+      if (e.type === 'add_item') {
+        detail = `Initial qty: <strong>${e.newQty}</strong> ${e.unit || ''}`;
+      } else if (e.type === 'adjust_qty') {
+        const diff = (e.newQty || 0) - (e.oldQty || 0);
+        const sign = diff >= 0 ? '+' : '';
+        detail = `${e.oldQty} &rarr; <strong>${e.newQty}</strong> ${e.unit || ''} <span style="color:${diff >= 0 ? 'var(--success)' : 'var(--danger)'}">(${sign}${diff})</span>`;
+      } else if (e.type === 'delete_item') {
+        detail = `Was ${e.oldQty} ${e.unit || ''}`;
+      }
+      return `
+        <div class="history-item">
+          <div class="history-header">
+            <div>
+              <div style="display:flex;align-items:center;gap:6px;">
+                <span class="history-badge" style="background:${color};">${label}</span>
+                <span class="history-user">${e.itemName || '-'}</span>
+              </div>
+              <div class="history-staff">By: ${e.role || '-'}</div>
+            </div>
+            <div style="text-align:right;">
+              <div class="history-date">${formatDate(e.date)}</div>
+              <div class="history-date">${formatTime(e.date)}</div>
+            </div>
+          </div>
+          <div class="history-items" style="margin-top:2px;">${detail}</div>
+        </div>`;
+    }
+  }).join('');
 
   // Load photo thumbnails from IndexedDB
   document.querySelectorAll('[data-photo-id]').forEach(img => {
@@ -1839,7 +1946,8 @@ async function exportFullBackup() {
       data: {
         items,
         transactions: txns,
-        settings
+        settings,
+        stockHistory: getStockHistory()
       },
       photos
     };
@@ -1881,6 +1989,7 @@ async function importFullBackup(input) {
       if (backup.data.items) saveItems(backup.data.items);
       if (backup.data.transactions) saveTransactions(backup.data.transactions);
       if (backup.data.settings) saveSettings(backup.data.settings);
+      if (backup.data.stockHistory) saveStockHistory(backup.data.stockHistory);
 
       // Restore photos to IndexedDB
       let photoCount = 0;
