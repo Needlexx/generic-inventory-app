@@ -341,6 +341,7 @@ select.form-control { appearance: none; background-image: url("data:image/svg+xm
 
   <!-- === STOCK TAB === -->
   <div class="tab-page" id="pageStock">
+    <div id="stockSummary"></div>
     <div class="card" style="padding:10px 12px;">
       <input class="form-control" id="stockSearch" placeholder="Search items..." oninput="renderInventory()" style="margin-bottom:8px;">
       <div class="cat-pills" id="catPills"></div>
@@ -986,9 +987,21 @@ function renderCategoryPills() {
 
 function renderInventory() {
   const q = (document.getElementById('stockSearch')?.value || '').toLowerCase();
-  let items = getItems();
+  const allItems = getItems();
+  let items = allItems;
   if (selectedCat !== 'All') items = items.filter(i => i.category === selectedCat);
   if (q) items = items.filter(i => i.name.toLowerCase().includes(q) || (i.productCode || '').toLowerCase().includes(q));
+
+  const totalProducts = allItems.length;
+  const totalCount = allItems.reduce((s, i) => s + i.quantity, 0);
+  const summaryEl = document.getElementById('stockSummary');
+  if (summaryEl) {
+    summaryEl.innerHTML = `
+      <div class="stats-grid" style="margin-bottom:10px;">
+        <div class="stat-card"><div class="stat-value">${totalProducts}</div><div class="stat-label">Products</div></div>
+        <div class="stat-card"><div class="stat-value">${totalCount}</div><div class="stat-label">Items in Stock</div></div>
+      </div>`;
+  }
 
   const el = document.getElementById('stockList');
   if (items.length === 0) {
@@ -1497,8 +1510,8 @@ function renderDashboard() {
   // Stats
   document.getElementById('dashStats').innerHTML = `
     <div class="stats-grid">
-      <div class="stat-card"><div class="stat-value">${items.length}</div><div class="stat-label">Total Items</div></div>
-      <div class="stat-card"><div class="stat-value">${items.reduce((s, i) => s + i.quantity, 0)}</div><div class="stat-label">Total Stock</div></div>
+      <div class="stat-card"><div class="stat-value">${items.length}</div><div class="stat-label">Products</div></div>
+      <div class="stat-card"><div class="stat-value">${items.reduce((s, i) => s + i.quantity, 0)}</div><div class="stat-label">Items in Stock</div></div>
       <div class="stat-card"><div class="stat-value" style="color:${lowItems.length > 0 ? 'var(--warning)' : 'var(--success)'};">${lowItems.length}</div><div class="stat-label">Low Stock</div></div>
       <div class="stat-card"><div class="stat-value">${todayTxns.length}</div><div class="stat-label">Today's Issues</div></div>
     </div>`;
