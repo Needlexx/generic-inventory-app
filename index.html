@@ -1489,6 +1489,7 @@ function renderHistory() {
     return;
   }
 
+  const asm = isASM();
   el.innerHTML = txns.map(t => `
     <div class="history-item">
       <div class="history-header">
@@ -1496,9 +1497,12 @@ function renderHistory() {
           <div class="history-user">${t.userName} &middot; Room ${t.userRoom || '-'}</div>
           <div class="history-staff">Staff: ${t.staffName || '-'}</div>
         </div>
-        <div style="text-align:right;">
-          <div class="history-date">${formatDate(t.date)}</div>
-          <div class="history-date">${formatTime(t.date)}</div>
+        <div style="text-align:right; display:flex; flex-direction:column; align-items:flex-end; gap:4px;">
+          <div>
+            <div class="history-date">${formatDate(t.date)}</div>
+            <div class="history-date">${formatTime(t.date)}</div>
+          </div>
+          ${asm ? `<button onclick="deleteTransaction('${t.id}')" title="Delete entry (restores stock)" style="background:rgba(220,53,69,0.1); border:1px solid rgba(220,53,69,0.3); color:var(--danger); border-radius:6px; padding:3px 8px; font-size:0.72rem; cursor:pointer; display:inline-flex; align-items:center; gap:3px;"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>Delete</button>` : ''}
         </div>
       </div>
       <div class="history-items">
@@ -1516,6 +1520,75 @@ function renderHistory() {
     if (ref.endsWith('.jpg')) url = await getCloudPhotoUrl(ref);
     if (!url) url = await getPhoto(ref);
     if (url) img.src = url; else img.style.display = 'none';
+  });
+}
+
+/* =================================================================
+   DELETE TRANSACTION — ASM only. Restores stock and cleans up photo.
+   ================================================================= */
+async function deleteTransaction(id) {
+  if (!requireASM('Only ASM can delete history entries')) return;
+  const txns = getTransactions();
+  const t = txns.find(x => x.id === id);
+  if (!t) { toast('Entry not found', 'error'); return; }
+
+  const summary = t.items.map(i => `${i.name} &times;${i.qty}`).join(', ');
+  showConfirm(
+    'Delete entry & restore stock?',
+    `This will permanently delete the transaction for <b>${t.userName}</b> (${formatDate(t.date)}) and return these items to stock:<br><br>${summary}<br><br>This cannot be undone.`,
+    async () => {
+      try {
+        showSyncStatus('syncing');
+        // 1. Restore stock locally + in Supabase
+        const items = getItems();
+        const touched = [];
+        for (const entry of (t.items || [])) {
+          const idx = items.findIndex(i => i.id === entry.itemId);
+          if (idx < 0) continue; // item was deleted — skip restore
+          items[idx].quantity = (items[idx].quantity || 0) + (entry.qty || 0);
+          touched.push(items[idx]);
+        }
+        saveItems(items);
+        await Promise.all(touched.map(i => pushItem(i)));
+
+        // 2. Remove photo from Supabase Storage
+        if (t.photoPath) {
+          try { await sb.storage.from(PHOTO_BUCKET).remove([t.photoPath]); }
+          catch(e) { console.warn('Cloud photo delete failed:', e); }
+        }
+
+        // 3. Remove photo from IndexedDB
+        if (t.photoId) {
+          try { await deletePhotoLocal(t.photoId); } catch(_) {}
+        }
+
+        // 4. Remove transaction row from Supabase
+        const { error } = await sb.from('transactions').delete().eq('id', id);
+        if (error) throw error;
+
+        // 5. Remove from local cache
+        saveTransactions(txns.filter(x => x.id !== id));
+
+        showSyncStatus('synced');
+        renderHistory();
+        renderInventory();
+        toast('Entry deleted and stock restored', 'success');
+      } catch(e) {
+        console.error('Delete transaction failed:', e);
+        showSyncStatus('error');
+        toast('Delete failed: ' + (e.message || 'unknown error'), 'error');
+      }
+    }
+  );
+}
+
+async function deletePhotoLocal(id) {
+  const db = await initPhotoDB();
+  return new Promise((resolve, reject) => {
+    const txn = db.transaction(STORE_NAME, 'readwrite');
+    txn.objectStore(STORE_NAME).delete(id);
+    txn.oncomplete = () => resolve();
+    txn.onerror = e => reject(e);
   });
 }
 
