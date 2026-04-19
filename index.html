@@ -331,6 +331,7 @@ select.form-control { appearance: none; background-image: url("data:image/svg+xm
       </svg>
     </div>
     <h1 id="orgNameHeader">SOS Inventory<span class="header-sub">Manager</span></h1>
+    <span id="roleBadge" style="display:none; margin-left:4px; font-size:0.6rem; padding:3px 9px; border-radius:10px; background:rgba(255,255,255,0.25); text-transform:uppercase; letter-spacing:0.6px; font-weight:700; color:#fff;"></span>
   </div>
   <div style="display:flex; align-items:center; gap:6px;">
     <div id="saveStatus" style="display:flex; align-items:center; gap:3px; font-size:0.68rem; color:rgba(255,255,255,0.7); transition:all 0.3s;">
@@ -370,7 +371,7 @@ select.form-control { appearance: none; background-image: url("data:image/svg+xm
       <div class="cat-pills" id="catPills"></div>
     </div>
     <div id="stockList"></div>
-    <button class="btn btn-primary btn-block" onclick="openAddItemModal()" style="margin-top:10px;">+ Add New Item</button>
+    <button id="addItemBtn" class="btn btn-primary btn-block" onclick="openAddItemModal()" style="margin-top:10px; display:none;">+ Add New Item</button>
   </div>
 
   <!-- === HISTORY TAB === -->
@@ -467,6 +468,38 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON, {
   auth: { persistSession: true, autoRefreshToken: true, storageKey: 'inv_auth' }
 });
 let currentUser = null;
+
+/* =================================================================
+   ROLES — ASM = full admin. Welfare = issue-only (no stock edits).
+   Add more ASM emails to the array below as needed.
+   Any email containing "asm" or "manager" also counts as ASM.
+   ================================================================= */
+const ASM_EMAILS = [
+  'hiwembleyasm@sosproperty.co.uk'
+];
+function isASM() {
+  if (!currentUser) return false;
+  const email = (currentUser.email || '').toLowerCase();
+  if (ASM_EMAILS.includes(email)) return true;
+  return /(^|[._-])(asm|manager)([._-@]|$)/.test(email);
+}
+function requireASM(msg) {
+  if (isASM()) return true;
+  toast(msg || 'ASM access only', 'warning');
+  return false;
+}
+function applyRoleUI() {
+  const asm = isASM();
+  const badge = document.getElementById('roleBadge');
+  if (badge) {
+    badge.textContent = asm ? 'ASM' : 'Welfare';
+    badge.style.display = '';
+    badge.style.background = asm ? 'rgba(255,193,7,0.95)' : 'rgba(255,255,255,0.25)';
+    badge.style.color = asm ? '#1a1a1a' : '#fff';
+  }
+  const addBtn = document.getElementById('addItemBtn');
+  if (addBtn) addBtn.style.display = asm ? '' : 'none';
+}
 
 /* =================================================================
    DATA LAYER
@@ -998,11 +1031,11 @@ function renderInventory() {
 
   el.innerHTML = '<div class="card">' + items.map(i => {
     const s = stockStatus(i);
-    const actions = `<div class="inv-item-actions">
+    const actions = isASM() ? `<div class="inv-item-actions">
       <button onclick="adjustQty('${i.id}', -1)" title="Decrease">-</button>
       <button onclick="adjustQty('${i.id}', 1)" title="Increase">+</button>
       <button onclick="openEditItemModal('${i.id}')" title="Edit" style="font-size:0.75rem;">&#9998;</button>
-    </div>`;
+    </div>` : '';
     return `<div class="inv-item">
       <div class="inv-item-info">
         <div class="inv-item-name">${i.name}</div>
@@ -1020,6 +1053,7 @@ function renderInventory() {
 }
 
 function adjustQty(id, delta) {
+  if (!requireASM('Only ASM can adjust stock')) return;
   const items = getItems();
   const idx = items.findIndex(i => i.id === id);
   if (idx < 0) return;
@@ -1031,6 +1065,7 @@ function adjustQty(id, delta) {
 }
 
 function openAddItemModal() {
+  if (!requireASM('Only ASM can add items')) return;
   openModal(`
     <div class="modal-header"><h3>Add New Item</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
     <div class="form-group">
@@ -1074,6 +1109,7 @@ function openAddItemModal() {
 }
 
 function addItem() {
+  if (!requireASM('Only ASM can add items')) return;
   const name = document.getElementById('addItemName').value.trim();
   if (!name) { toast('Please enter an item name', 'warning'); return; }
   const items = getItems();
@@ -1098,6 +1134,7 @@ function addItem() {
 }
 
 function openEditItemModal(id) {
+  if (!requireASM('Only ASM can edit items')) return;
   const items = getItems();
   const i = items.find(x => x.id === id);
   if (!i) return;
@@ -1145,6 +1182,7 @@ function openEditItemModal(id) {
 }
 
 function saveEditItem(id) {
+  if (!requireASM('Only ASM can edit items')) return;
   const items = getItems();
   const idx = items.findIndex(i => i.id === id);
   if (idx < 0) return;
@@ -1166,6 +1204,7 @@ function saveEditItem(id) {
 }
 
 function deleteItem(id) {
+  if (!requireASM('Only ASM can delete items')) return;
   closeModal();
   showConfirm('Delete Item', 'Are you sure you want to delete this item? This cannot be undone.', () => {
     const items = getItems().filter(i => i.id !== id);
@@ -1965,6 +2004,7 @@ async function doLogout() {
 }
 
 async function afterAuthReady() {
+  applyRoleUI();
   showSyncStatus('syncing');
   try {
     await pullFromSupabase();
