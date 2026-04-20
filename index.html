@@ -720,12 +720,26 @@ select.form-control {
 /* ========== ROLE BADGE (header) ========== */
 #roleBadge {
   display: none; margin-left: 6px;
-  font-size: 0.58rem; padding: 3px 9px;
+  font-size: 0.58rem; padding: 3px 9px 3px 6px;
   border-radius: var(--radius-full);
   background: rgba(255,255,255,0.22);
   border: 1px solid rgba(255,255,255,0.28);
   text-transform: uppercase; letter-spacing: 0.08em;
   font-weight: 700; color: white;
+  align-items: center; gap: 4px;
+  line-height: 1;
+}
+#roleBadge.active { display: inline-flex; }
+#roleBadge svg { width: 11px; height: 11px; flex-shrink: 0; }
+#roleBadge.asm {
+  background: linear-gradient(135deg, #fde68a 0%, #fbbf24 100%);
+  color: #1a1a1a;
+  border-color: rgba(0,0,0,0.12);
+  box-shadow: 0 2px 6px -1px rgba(251,191,36,0.55);
+}
+#roleBadge.welfare {
+  background: linear-gradient(135deg, rgba(255,255,255,0.28), rgba(255,255,255,0.18));
+  color: #fff;
 }
 
 /* ========== SAVE / SYNC STATUS ========== */
@@ -764,7 +778,7 @@ select.form-control {
       </svg>
     </div>
     <h1 id="orgNameHeader">SOS Property<span class="header-sub">Inventory</span></h1>
-    <span id="roleBadge" style="display:none; margin-left:4px; font-size:0.6rem; padding:3px 9px; border-radius:10px; background:rgba(255,255,255,0.25); text-transform:uppercase; letter-spacing:0.6px; font-weight:700; color:#fff;"></span>
+    <span id="roleBadge"></span>
   </div>
   <div class="header-right">
     <div id="saveStatus" style="display:flex; align-items:center; gap:4px;">
@@ -953,10 +967,13 @@ function applyRoleUI() {
   const asm = isASM();
   const badge = document.getElementById('roleBadge');
   if (badge) {
-    badge.textContent = asm ? 'ASM' : 'Welfare';
-    badge.style.display = '';
-    badge.style.background = asm ? 'rgba(255,193,7,0.95)' : 'rgba(255,255,255,0.25)';
-    badge.style.color = asm ? '#1a1a1a' : '#fff';
+    // ASM → shield with check (authority). Welfare → heart (care).
+    const asmIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l8 4v6c0 5-3.5 9-8 10-4.5-1-8-5-8-10V6l8-4z"/><polyline points="9 12 11 14 15 10"/></svg>';
+    const welfareIcon = '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>';
+    badge.classList.remove('asm', 'welfare');
+    badge.classList.add('active', asm ? 'asm' : 'welfare');
+    badge.innerHTML = (asm ? asmIcon : welfareIcon) + '<span>' + (asm ? 'ASM' : 'Welfare') + '</span>';
+    badge.title = asm ? 'Signed in as ASM (full access)' : 'Signed in as Welfare team member';
   }
   const addBtn = document.getElementById('addItemBtn');
   if (addBtn) addBtn.style.display = asm ? '' : 'none';
