@@ -94,6 +94,27 @@ drop policy if exists "auth_delete_inventory_photos" on storage.objects;
 create policy "auth_delete_inventory_photos" on storage.objects
   for delete to authenticated using (bucket_id = 'inventory-photos');
 
+-- ============ REALTIME PUBLICATION ====================================
+-- Tells Supabase Realtime to broadcast INSERT/UPDATE/DELETE events on
+-- these tables so every signed-in device sees changes instantly.
+
+do $$
+begin
+  execute 'alter publication supabase_realtime add table public.items';
+exception when duplicate_object then null;
+end $$;
+
+do $$
+begin
+  execute 'alter publication supabase_realtime add table public.transactions';
+exception when duplicate_object then null;
+end $$;
+
+-- Make sure full row payloads are sent on UPDATE/DELETE so clients can
+-- reconcile local cache without a second round-trip.
+alter table public.items replica identity full;
+alter table public.transactions replica identity full;
+
 -- ============ DAILY 28-DAY PURGE (pg_cron) ============================
 -- Runs every day at 03:00 UTC. Deletes transactions older than 28 days.
 -- Storage photos are cleaned up by the client on startup (orphan sweep).
@@ -119,4 +140,7 @@ select cron.schedule(
 --    (Tick "Auto Confirm User" so they can sign in immediately)
 -- 3. Authentication → Providers → Email → turn OFF "Enable signups"
 --    (blocks self-registration — admin-created accounts only)
+-- 4. Database → Replication → supabase_realtime publication → make sure
+--    'items' and 'transactions' are toggled ON (this SQL already does it,
+--    but double-check in the UI after running).
 -- ======================================================================

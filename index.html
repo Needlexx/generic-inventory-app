@@ -2744,6 +2744,7 @@ async function doLogin() {
 
 async function doLogout() {
   showConfirm('Sign out', 'You will need to sign in again to use the app.', async () => {
+    try { unsubscribeRealtime(); } catch(e) {}
     await sb.auth.signOut();
     // Clear local cache so next user doesn't see old data
     localStorage.removeItem(KEYS.items);
@@ -2766,6 +2767,8 @@ async function afterAuthReady() {
   }
   renderInventory();
   renderCategoryPills();
+  // Subscribe to live updates so changes appear instantly on all devices
+  try { subscribeToRealtime(); } catch(e) { console.warn('Realtime subscribe failed:', e); }
   // Orphan photo sweep (once per 24h)
   const lastSweep = parseInt(localStorage.getItem(KEYS.orphanSweep) || '0');
   if (Date.now() - lastSweep > 86400000) {
@@ -2833,6 +2836,90 @@ async function pushTransaction(txn) {
   });
   if (error) { showSyncStatus('error'); toast('Transaction sync failed: ' + error.message, 'error'); return false; }
   showSyncStatus('synced'); return true;
+}
+
+/* =================================================================
+   REALTIME — live updates across devices via Supabase Realtime
+   ================================================================= */
+let realtimeChannels = [];
+
+function subscribeToRealtime() {
+  // Clean up any existing subscriptions first
+  unsubscribeRealtime();
+
+  const itemsCh = sb.channel('realtime-items')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'items' }, handleItemsChange)
+    .subscribe((status) => {
+      if (status === 'SUBSCRIBED') console.log('[Realtime] items channel ready');
+      if (status === 'CHANNEL_ERROR') console.warn('[Realtime] items channel error');
+    });
+
+  const txnCh = sb.channel('realtime-txns')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, handleTxnChange)
+    .subscribe((status) => {
+      if (status === 'SUBSCRIBED') console.log('[Realtime] transactions channel ready');
+      if (status === 'CHANNEL_ERROR') console.warn('[Realtime] transactions channel error');
+    });
+
+  realtimeChannels = [itemsCh, txnCh];
+}
+
+function unsubscribeRealtime() {
+  realtimeChannels.forEach(ch => { try { sb.removeChannel(ch); } catch(e){} });
+  realtimeChannels = [];
+}
+
+function handleItemsChange(payload) {
+  const items = getItems();
+  if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+    const r = payload.new;
+    const item = {
+      id: r.id, name: r.name, category: r.category, quantity: r.quantity,
+      unit: r.unit, minStock: r.min_stock, maxStock: r.max_stock,
+      productCode: r.product_code, dateAdded: r.created_at
+    };
+    const idx = items.findIndex(i => i.id === r.id);
+    if (idx >= 0) items[idx] = item; else items.push(item);
+  } else if (payload.eventType === 'DELETE') {
+    const id = payload.old && payload.old.id;
+    if (!id) return;
+    const idx = items.findIndex(i => i.id === id);
+    if (idx >= 0) items.splice(idx, 1);
+  }
+  localStorage.setItem(KEYS.items, JSON.stringify(items));
+  // Re-render whichever tab is currently active
+  refreshActiveTab();
+}
+
+function handleTxnChange(payload) {
+  const txns = getTransactions();
+  if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+    const r = payload.new;
+    const txn = {
+      id: r.id, userName: r.user_name, userRoom: r.user_room, staffName: r.staff_name,
+      items: r.items, notes: r.notes, photoPath: r.photo_path, date: r.created_at
+    };
+    const idx = txns.findIndex(t => t.id === r.id);
+    if (idx >= 0) txns[idx] = txn; else txns.unshift(txn);
+  } else if (payload.eventType === 'DELETE') {
+    const id = payload.old && payload.old.id;
+    if (!id) return;
+    const idx = txns.findIndex(t => t.id === id);
+    if (idx >= 0) txns.splice(idx, 1);
+  }
+  localStorage.setItem(KEYS.transactions, JSON.stringify(txns));
+  refreshActiveTab();
+}
+
+function refreshActiveTab() {
+  const stock = document.getElementById('pageStock');
+  const count = document.getElementById('pageCount');
+  const hist = document.getElementById('pageHistory');
+  const dash = document.getElementById('pageDashboard');
+  if (stock && stock.classList.contains('active')) { renderInventory(); renderCategoryPills(); }
+  if (count && count.classList.contains('active')) renderCount();
+  if (hist && hist.classList.contains('active')) renderHistory();
+  if (dash && dash.classList.contains('active')) renderDashboard();
 }
 
 /* =================================================================
