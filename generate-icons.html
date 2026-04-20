@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Generate PWA Icons</title>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif;
+    background: #0f172a; color: #e2e8f0; margin: 0; padding: 30px 20px;
+    min-height: 100vh; display: flex; flex-direction: column; align-items: center;
+  }
+  h1 { margin: 0 0 8px; font-size: 1.6rem; }
+  p { color: #94a3b8; max-width: 560px; text-align: center; margin: 4px 0 20px; line-height: 1.5; }
+  .previews { display: flex; gap: 24px; margin: 24px 0; flex-wrap: wrap; justify-content: center; }
+  .preview { text-align: center; }
+  .preview canvas { background: #1e293b; border-radius: 16px; box-shadow: 0 10px 30px -8px rgba(0,0,0,0.6); }
+  .preview-label { margin-top: 8px; font-size: 0.85rem; color: #94a3b8; }
+  .actions { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; margin-top: 12px; }
+  button {
+    background: linear-gradient(135deg, #ef4444, #b91c1c); color: white;
+    border: none; padding: 12px 22px; border-radius: 10px;
+    font-size: 0.95rem; font-weight: 600; cursor: pointer;
+    box-shadow: 0 6px 18px -4px rgba(220,38,38,0.55);
+  }
+  button:hover { transform: translateY(-1px); }
+  button.secondary { background: #334155; box-shadow: none; }
+  .steps {
+    background: #1e293b; border-radius: 12px; padding: 18px 22px;
+    max-width: 560px; margin-top: 24px; font-size: 0.9rem; line-height: 1.6;
+  }
+  .steps h3 { margin: 0 0 8px; font-size: 1rem; color: #f1f5f9; }
+  .steps code {
+    background: #0f172a; padding: 2px 7px; border-radius: 4px;
+    font-size: 0.85rem; color: #fca5a5;
+  }
+  .steps ol { margin: 8px 0 0; padding-left: 22px; }
+  .steps li { margin-bottom: 6px; }
+  .upload-box {
+    border: 2px dashed #475569; border-radius: 10px;
+    padding: 18px; margin: 16px 0 8px; text-align: center;
+    cursor: pointer; transition: border-color .15s;
+  }
+  .upload-box:hover { border-color: #ef4444; }
+  .upload-box input { display: none; }
+  .upload-box label { cursor: pointer; color: #cbd5e1; }
+  .upload-box label strong { color: #fca5a5; }
+</style>
+</head>
+<body>
+  <h1>Generate PWA Icons</h1>
+  <p>
+    This tool creates the two PNG files your app needs for home-screen / PWA installs
+    (especially on iOS). It draws from <code style="background:#1e293b;padding:2px 6px;border-radius:4px;color:#fca5a5;">favicon.svg</code>
+    by default, or you can upload your own image.
+  </p>
+
+  <div class="upload-box">
+    <label for="upload">
+      <strong>Click to upload a custom image</strong><br>
+      <span style="font-size:0.8rem; color:#94a3b8;">(PNG, JPG or SVG — otherwise we use the current favicon.svg)</span>
+      <input type="file" id="upload" accept="image/*">
+    </label>
+  </div>
+
+  <div class="previews">
+    <div class="preview">
+      <canvas id="c192" width="192" height="192"></canvas>
+      <div class="preview-label">icon-192.png (192&times;192)</div>
+    </div>
+    <div class="preview">
+      <canvas id="c512" width="512" height="512"></canvas>
+      <div class="preview-label">icon-512.png (512&times;512)</div>
+    </div>
+  </div>
+
+  <div class="actions">
+    <button onclick="downloadAll()">⬇ Download Both PNGs</button>
+    <button class="secondary" onclick="loadFavicon()">Reset to favicon.svg</button>
+  </div>
+
+  <div class="steps">
+    <h3>Next steps</h3>
+    <ol>
+      <li>Click <strong>Download Both PNGs</strong> — you'll get <code>icon-192.png</code> and <code>icon-512.png</code></li>
+      <li>Move both files into your project's <code>icons/</code> folder, overwriting the old ones</li>
+      <li>Open a terminal in the project and run:<br>
+        <code>git add icons/ &amp;&amp; git commit -m "Update PWA icons" &amp;&amp; git push</code>
+      </li>
+      <li>On each device, uninstall the old PWA and reinstall so the new icon shows</li>
+    </ol>
+  </div>
+
+<script>
+const c192 = document.getElementById('c192');
+const c512 = document.getElementById('c512');
+let sourceImg = null;
+
+function drawImage(img) {
+  [c192, c512].forEach(c => {
+    const ctx = c.getContext('2d');
+    ctx.clearRect(0, 0, c.width, c.height);
+    // Cover-fit: keep aspect ratio, centre-crop if needed
+    const iw = img.naturalWidth || img.width;
+    const ih = img.naturalHeight || img.height;
+    const scale = Math.max(c.width / iw, c.height / ih);
+    const dw = iw * scale;
+    const dh = ih * scale;
+    const dx = (c.width - dw) / 2;
+    const dy = (c.height - dh) / 2;
+    ctx.drawImage(img, dx, dy, dw, dh);
+  });
+}
+
+function loadFavicon() {
+  const img = new Image();
+  img.onload = () => { sourceImg = img; drawImage(img); };
+  img.onerror = () => alert('Could not load favicon.svg — make sure it exists.');
+  // Cache-buster so a newly-saved favicon is picked up
+  img.src = 'favicon.svg?t=' + Date.now();
+}
+
+document.getElementById('upload').addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    const img = new Image();
+    img.onload = () => { sourceImg = img; drawImage(img); };
+    img.src = ev.target.result;
+  };
+  reader.readAsDataURL(file);
+});
+
+function download(canvas, filename) {
+  canvas.toBlob(blob => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, 'image/png');
+}
+
+function downloadAll() {
+  if (!sourceImg) { alert('Nothing to download yet — upload an image or reset to favicon.svg first.'); return; }
+  download(c192, 'icon-192.png');
+  // Slight delay so browsers don't block the second download
+  setTimeout(() => download(c512, 'icon-512.png'), 300);
+}
+
+loadFavicon();
+</script>
+</body>
+</html>
