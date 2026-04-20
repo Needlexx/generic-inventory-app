@@ -717,6 +717,62 @@ select.form-control {
 }
 .count-summary .val { font-weight: 800; color: var(--text); font-size: 0.92rem; margin-left: 4px; }
 
+/* ========== VARIANCE REPORT MODAL ========== */
+.var-report-date { font-size: 0.78rem; color: var(--text-light); margin-bottom: 14px; }
+.var-kpi-grid {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+  margin-bottom: 14px;
+}
+.var-kpi {
+  padding: 12px 8px; border-radius: var(--radius-lg);
+  background: var(--bg); border: 1px solid var(--border-soft);
+  text-align: center;
+}
+.var-kpi-val { font-size: 1.3rem; font-weight: 800; letter-spacing: -0.02em; line-height: 1; }
+.var-kpi-lbl { font-size: 0.66rem; color: var(--text-light); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
+.var-kpi.pos .var-kpi-val { color: var(--info); }
+.var-kpi.neg .var-kpi-val { color: var(--danger); }
+.var-kpi.good .var-kpi-val { color: var(--success); }
+
+.var-status-row {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 8px 12px; border-radius: var(--radius-md);
+  margin-bottom: 6px; font-size: 0.85rem;
+}
+.var-status-row.ok { background: rgba(34, 197, 94, 0.08); color: #14532d; }
+.var-status-row.surplus { background: rgba(59, 130, 246, 0.08); color: #1e3a8a; }
+.var-status-row.short { background: rgba(239, 68, 68, 0.08); color: #7f1d1d; }
+.var-status-row .pct { font-weight: 700; }
+
+.var-section-title {
+  font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.08em; color: var(--text-light);
+  margin: 16px 0 8px; padding-bottom: 4px;
+  border-bottom: 1px solid var(--divider);
+}
+
+.var-item-row {
+  display: grid; grid-template-columns: 1fr auto auto;
+  gap: 8px; padding: 6px 2px; font-size: 0.82rem;
+  border-bottom: 1px dashed var(--divider);
+}
+.var-item-row:last-child { border-bottom: none; }
+.var-item-row .nm { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.var-item-row .delta { font-weight: 700; min-width: 42px; text-align: right; }
+.var-item-row .pct { font-weight: 700; min-width: 62px; text-align: right; }
+.delta.neg, .pct.neg { color: var(--danger); }
+.delta.pos, .pct.pos { color: var(--info); }
+
+.var-cat-row {
+  display: grid; grid-template-columns: 1fr auto auto;
+  gap: 8px; padding: 7px 2px; font-size: 0.82rem;
+  border-bottom: 1px dashed var(--divider);
+  align-items: center;
+}
+.var-cat-row:last-child { border-bottom: none; }
+.var-cat-row .nm { font-weight: 600; }
+.var-cat-row .ct { color: var(--text-light); font-size: 0.74rem; }
+
 /* ========== ROLE BADGE (header) ========== */
 #roleBadge {
   display: none; margin-left: 6px;
@@ -836,7 +892,10 @@ select.form-control {
       </div>
       <div id="countList"></div>
     </div>
-    <div style="display:flex; gap:8px; margin-top:10px;">
+    <button class="btn btn-primary btn-block" onclick="submitCountReport()" style="margin-top:10px;">
+      Submit &amp; View Variance Report
+    </button>
+    <div style="display:flex; gap:8px; margin-top:8px;">
       <button class="btn btn-outline" onclick="resetCount()" style="flex:1;">Reset</button>
       <button class="btn btn-success" onclick="downloadCountExcel()" style="flex:1;">Export Excel</button>
     </div>
@@ -1806,31 +1865,227 @@ function resetCount() {
   });
 }
 
-function downloadCountExcel() {
+/* ---- Variance computation helpers ---- */
+function computeVariance() {
   const items = getItems();
-  const counted = items.filter(i => countState[i.id]?.counted);
-  if (!counted.length) { toast('Enter at least one count first', 'warning'); return; }
-  const rows = [['Item', 'Category', 'Unit', 'System Qty', 'Counted Qty', 'Variance', 'Status']];
-  items.sort((a, b) => a.category.localeCompare(b.category) || a.name.localeCompare(b.name));
-  let short = 0, surplus = 0, ok = 0;
+  const counted = [];
+  let sumSystem = 0, sumActual = 0, sumAbsVar = 0;
+  let okCount = 0, surplusCount = 0, shortCount = 0;
   items.forEach(i => {
     const s = countState[i.id];
     if (!s || !s.counted) return;
-    const v = s.actual - i.quantity;
-    const status = v === 0 ? 'OK' : v > 0 ? 'Surplus' : 'Short';
-    if (v === 0) ok++; else if (v > 0) surplus++; else short++;
-    rows.push([i.name, i.category, i.unit || 'pcs', i.quantity, s.actual, v, status]);
+    const sys = Number(i.quantity) || 0;
+    const act = Number(s.actual) || 0;
+    const variance = act - sys;
+    // Per-item percent: if system is 0, represent new stock as 100 (+100%); else normal %
+    let pct;
+    if (sys === 0 && act === 0) pct = 0;
+    else if (sys === 0) pct = 100;  // treat as new stock found
+    else pct = (variance / sys) * 100;
+    counted.push({
+      id: i.id, name: i.name, category: i.category, unit: i.unit || 'pcs',
+      system: sys, actual: act, variance, pct
+    });
+    sumSystem += sys;
+    sumActual += act;
+    sumAbsVar += Math.abs(variance);
+    if (variance === 0) okCount++;
+    else if (variance > 0) surplusCount++;
+    else shortCount++;
   });
+  const netVar = sumActual - sumSystem;
+  const netPct = sumSystem > 0 ? (netVar / sumSystem) * 100 : 0;
+  const accuracyPct = counted.length > 0 ? (okCount / counted.length) * 100 : 0;
+  // Absolute variance % — how much total stock moved (shrinkage indicator)
+  const absVarPct = sumSystem > 0 ? (sumAbsVar / sumSystem) * 100 : 0;
+
+  // Group by category
+  const byCat = {};
+  counted.forEach(c => {
+    if (!byCat[c.category]) byCat[c.category] = { items: 0, system: 0, actual: 0, variance: 0 };
+    byCat[c.category].items++;
+    byCat[c.category].system += c.system;
+    byCat[c.category].actual += c.actual;
+    byCat[c.category].variance += c.variance;
+  });
+  const cats = Object.entries(byCat).map(([name, v]) => ({
+    name, ...v,
+    pct: v.system > 0 ? (v.variance / v.system) * 100 : (v.actual > 0 ? 100 : 0)
+  })).sort((a, b) => Math.abs(b.pct) - Math.abs(a.pct));
+
+  return {
+    items: counted, sumSystem, sumActual, netVar, netPct, accuracyPct, absVarPct,
+    okCount, surplusCount, shortCount, cats
+  };
+}
+
+function fmtPct(n) {
+  const sign = n > 0 ? '+' : '';
+  return sign + n.toFixed(1) + '%';
+}
+function fmtDelta(n) {
+  return (n > 0 ? '+' : '') + n;
+}
+
+function submitCountReport() {
+  const data = computeVariance();
+  if (!data.items.length) { toast('Enter at least one count first', 'warning'); return; }
+
+  const { items, sumSystem, sumActual, netVar, netPct, accuracyPct, absVarPct,
+          okCount, surplusCount, shortCount, cats } = data;
+
+  const shorts = items.filter(i => i.variance < 0).sort((a, b) => a.pct - b.pct).slice(0, 5);
+  const surpluses = items.filter(i => i.variance > 0).sort((a, b) => b.pct - a.pct).slice(0, 5);
+
+  const total = items.length;
+  const okPct = total > 0 ? (okCount / total) * 100 : 0;
+  const surplusPctOfItems = total > 0 ? (surplusCount / total) * 100 : 0;
+  const shortPctOfItems = total > 0 ? (shortCount / total) * 100 : 0;
+
+  // Colour classes for KPIs
+  const netClass = netVar === 0 ? 'good' : (netVar > 0 ? 'pos' : 'neg');
+  const accClass = accuracyPct >= 95 ? 'good' : (accuracyPct >= 80 ? '' : 'neg');
+
+  const reportDate = new Date().toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' });
+
+  const itemRow = (i) => {
+    const cls = i.variance === 0 ? '' : (i.variance > 0 ? 'pos' : 'neg');
+    return `<div class="var-item-row">
+      <span class="nm">${i.name}</span>
+      <span class="delta ${cls}">${fmtDelta(i.variance)}</span>
+      <span class="pct ${cls}">${fmtPct(i.pct)}</span>
+    </div>`;
+  };
+
+  const catRow = (c) => {
+    const cls = c.variance === 0 ? '' : (c.variance > 0 ? 'pos' : 'neg');
+    return `<div class="var-cat-row">
+      <div><div class="nm">${c.name}</div><div class="ct">${c.items} item${c.items !== 1 ? 's' : ''}</div></div>
+      <span class="delta ${cls}">${fmtDelta(c.variance)}</span>
+      <span class="pct ${cls}">${fmtPct(c.pct)}</span>
+    </div>`;
+  };
+
+  const asmApplyBtn = isASM()
+    ? `<button class="btn btn-warning" style="flex:1;" onclick="closeModal(); applyCountVariance();">Apply Variance</button>`
+    : '';
+
+  const html = `
+    <div class="modal-header">
+      <h3>Stock Count Variance Report</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="var-report-date">${reportDate} &middot; ${total} item${total !== 1 ? 's' : ''} counted</div>
+
+    <div class="var-kpi-grid">
+      <div class="var-kpi ${accClass}">
+        <div class="var-kpi-val">${accuracyPct.toFixed(1)}%</div>
+        <div class="var-kpi-lbl">Accuracy</div>
+      </div>
+      <div class="var-kpi ${netClass}">
+        <div class="var-kpi-val">${fmtPct(netPct)}</div>
+        <div class="var-kpi-lbl">Net Variance</div>
+      </div>
+      <div class="var-kpi">
+        <div class="var-kpi-val">${absVarPct.toFixed(1)}%</div>
+        <div class="var-kpi-lbl">Total Movement</div>
+      </div>
+    </div>
+
+    <div class="var-status-row ok">
+      <span>Matches system (OK)</span>
+      <span><b>${okCount}</b> &nbsp;<span class="pct">${okPct.toFixed(1)}%</span></span>
+    </div>
+    <div class="var-status-row surplus">
+      <span>Surplus (counted &gt; system)</span>
+      <span><b>${surplusCount}</b> &nbsp;<span class="pct">${surplusPctOfItems.toFixed(1)}%</span></span>
+    </div>
+    <div class="var-status-row short">
+      <span>Short (counted &lt; system)</span>
+      <span><b>${shortCount}</b> &nbsp;<span class="pct">${shortPctOfItems.toFixed(1)}%</span></span>
+    </div>
+
+    <div style="display:flex; justify-content:space-between; padding:10px 2px; font-size:0.82rem; color:var(--text-light);">
+      <span>System total: <b style="color:var(--text)">${sumSystem}</b></span>
+      <span>Counted total: <b style="color:var(--text)">${sumActual}</b></span>
+      <span>Net: <b style="color:${netVar === 0 ? 'var(--text)' : netVar > 0 ? 'var(--info)' : 'var(--danger)'}">${fmtDelta(netVar)}</b></span>
+    </div>
+
+    ${shorts.length ? `<div class="var-section-title">Top Shortages</div>${shorts.map(itemRow).join('')}` : ''}
+    ${surpluses.length ? `<div class="var-section-title">Top Surpluses</div>${surpluses.map(itemRow).join('')}` : ''}
+
+    <div class="var-section-title">By Category</div>
+    ${cats.map(catRow).join('')}
+
+    <details style="margin-top:14px;">
+      <summary style="cursor:pointer; font-size:0.82rem; font-weight:600; color:var(--primary); padding:6px 0;">
+        Show all ${total} counted item${total !== 1 ? 's' : ''}
+      </summary>
+      <div style="margin-top:8px;">
+        ${items.slice().sort((a, b) => Math.abs(b.pct) - Math.abs(a.pct)).map(itemRow).join('')}
+      </div>
+    </details>
+
+    <div style="display:flex; gap:8px; margin-top:18px;">
+      <button class="btn btn-outline" style="flex:1;" onclick="closeModal()">Close</button>
+      <button class="btn btn-success" style="flex:1;" onclick="downloadCountExcel()">Export Excel</button>
+      ${asmApplyBtn}
+    </div>
+  `;
+  openModal(html);
+}
+
+function downloadCountExcel() {
+  const data = computeVariance();
+  if (!data.items.length) { toast('Enter at least one count first', 'warning'); return; }
+
+  const { items, sumSystem, sumActual, netVar, netPct, accuracyPct, absVarPct,
+          okCount, surplusCount, shortCount, cats } = data;
+
+  // Sheet 1: Details
+  const rows = [['Item', 'Category', 'Unit', 'System Qty', 'Counted Qty', 'Variance', 'Variance %', 'Status']];
+  items
+    .slice()
+    .sort((a, b) => a.category.localeCompare(b.category) || a.name.localeCompare(b.name))
+    .forEach(i => {
+      const status = i.variance === 0 ? 'OK' : i.variance > 0 ? 'Surplus' : 'Short';
+      rows.push([
+        i.name, i.category, i.unit,
+        i.system, i.actual, i.variance,
+        Number(i.pct.toFixed(2)), status
+      ]);
+    });
   rows.push([]);
-  rows.push(['Summary', '', '', '', '', '', '']);
-  rows.push(['OK', ok]);
-  rows.push(['Surplus (+)', surplus]);
-  rows.push(['Short (-)', short]);
-  rows.push(['Total counted', counted.length]);
+  rows.push(['SUMMARY']);
+  rows.push(['Items counted', items.length]);
+  rows.push(['Matches (OK)', okCount, '', '', '', '', Number(((okCount / items.length) * 100).toFixed(2)), '%']);
+  rows.push(['Surplus (+)', surplusCount, '', '', '', '', Number(((surplusCount / items.length) * 100).toFixed(2)), '%']);
+  rows.push(['Short (-)', shortCount, '', '', '', '', Number(((shortCount / items.length) * 100).toFixed(2)), '%']);
+  rows.push([]);
+  rows.push(['System total qty', sumSystem]);
+  rows.push(['Counted total qty', sumActual]);
+  rows.push(['Net variance (units)', netVar]);
+  rows.push(['Net variance %', Number(netPct.toFixed(2))]);
+  rows.push(['Accuracy %', Number(accuracyPct.toFixed(2))]);
+  rows.push(['Total stock movement %', Number(absVarPct.toFixed(2))]);
+
   const ws = XLSX.utils.aoa_to_sheet(rows);
-  ws['!cols'] = [{ wch: 35 }, { wch: 18 }, { wch: 10 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }];
+  ws['!cols'] = [
+    { wch: 35 }, { wch: 18 }, { wch: 10 },
+    { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 13 }, { wch: 12 }
+  ];
+
+  // Sheet 2: By Category
+  const catRows = [['Category', 'Items', 'System Qty', 'Counted Qty', 'Variance', 'Variance %']];
+  cats.forEach(c => {
+    catRows.push([c.name, c.items, c.system, c.actual, c.variance, Number(c.pct.toFixed(2))]);
+  });
+  const wsCat = XLSX.utils.aoa_to_sheet(catRows);
+  wsCat['!cols'] = [{ wch: 22 }, { wch: 8 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 13 }];
+
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Stock Count');
+  XLSX.utils.book_append_sheet(wb, wsCat, 'By Category');
   XLSX.writeFile(wb, `Stock_Count_${today()}.xlsx`);
   toast('Count exported!', 'success');
 }
