@@ -1,8 +1,11 @@
-const CACHE_NAME = 'inventory-app-v18';
+const CACHE_NAME = 'inventory-app-v19';
 const ASSETS = [
   './',
   './index.html',
   './manifest.json',
+  './favicon.svg',
+  './icons/icon-192.png',
+  './icons/icon-512.png',
   'https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js',
   'https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js',
   'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2',
