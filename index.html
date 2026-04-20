@@ -712,6 +712,52 @@ select.form-control {
   font-weight: 800; font-size: 0.92rem;
   letter-spacing: -0.02em;
 }
+
+/* ========== LAST VISIT PANEL (issue flow) ========== */
+.last-visit-card {
+  margin: 10px 0 6px;
+  padding: 12px 14px;
+  border-radius: var(--radius-lg);
+  background: linear-gradient(135deg, rgba(99,102,241,0.08), rgba(6,182,212,0.06));
+  border: 1px solid rgba(99,102,241,0.25);
+  animation: lvFadeIn 0.22s ease-out;
+}
+.last-visit-card.warn {
+  background: linear-gradient(135deg, rgba(251,191,36,0.1), rgba(239,68,68,0.06));
+  border-color: rgba(251,191,36,0.35);
+}
+.last-visit-card.new {
+  background: linear-gradient(135deg, rgba(34,197,94,0.08), rgba(59,130,246,0.05));
+  border-color: rgba(34,197,94,0.3);
+}
+.last-visit-head {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 0.75rem; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--primary);
+  margin-bottom: 6px;
+}
+.last-visit-card.warn .last-visit-head { color: #b45309; }
+.last-visit-card.new .last-visit-head { color: #047857; }
+.last-visit-head svg { width: 14px; height: 14px; }
+.last-visit-when { font-size: 0.9rem; font-weight: 700; color: var(--text); margin-bottom: 2px; }
+.last-visit-sub { font-size: 0.78rem; color: var(--text-light); margin-bottom: 8px; }
+.last-visit-items {
+  display: flex; flex-wrap: wrap; gap: 4px 6px;
+  font-size: 0.78rem;
+}
+.last-visit-chip {
+  padding: 3px 8px; border-radius: var(--radius-full);
+  background: rgba(255,255,255,0.85);
+  border: 1px solid var(--border-soft);
+  color: var(--text);
+  font-weight: 500;
+}
+.last-visit-chip b { color: var(--primary); font-weight: 700; margin-right: 2px; }
+@keyframes lvFadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
 .count-summary {
   padding: 12px 16px;
   border-bottom: 1px solid var(--divider);
@@ -2132,6 +2178,125 @@ function initIssueFlow() {
   renderIssueStep();
 }
 
+/* ---- Last-visit lookup ---- */
+function normName(s) { return (s || '').toString().toLowerCase().trim().replace(/\s+/g, ' '); }
+function normRoom(s) { return (s || '').toString().trim().replace(/\s+/g, ''); }
+
+function timeAgo(dateStr) {
+  const then = new Date(dateStr);
+  const now = new Date();
+  const diffMs = now - then;
+  const diffMin = Math.round(diffMs / 60000);
+  const diffHr = Math.round(diffMs / 3600000);
+  const diffDay = Math.round(diffMs / 86400000);
+  // Same-day check
+  const sameDay = then.toDateString() === now.toDateString();
+  const yesterday = new Date(now); yesterday.setDate(now.getDate() - 1);
+  const isYesterday = then.toDateString() === yesterday.toDateString();
+  if (sameDay) {
+    if (diffMin < 1) return 'Just now';
+    if (diffMin < 60) return `${diffMin} min ago`;
+    return `${diffHr} hr ago (today)`;
+  }
+  if (isYesterday) return 'Yesterday';
+  if (diffDay < 7) return `${diffDay} days ago`;
+  if (diffDay < 30) return `${Math.round(diffDay / 7)} week${diffDay < 14 ? '' : 's'} ago`;
+  return formatDate(dateStr);
+}
+
+// Returns { match: txn, reason: 'exact' | 'nameOnly' | 'roomOnly' | null }
+function findLastVisit(name, room) {
+  const n = normName(name);
+  const r = normRoom(room);
+  if (!n && !r) return null;
+  const txns = getTransactions();
+  // Sort by date desc just in case
+  const sorted = txns.slice().sort((a, b) => new Date(b.date) - new Date(a.date));
+  let exact = null, nameOnly = null, roomOnly = null;
+  for (const t of sorted) {
+    const tn = normName(t.userName);
+    const tr = normRoom(t.userRoom);
+    if (n && r && tn === n && tr === r && !exact) { exact = t; break; }
+  }
+  if (exact) return { match: exact, reason: 'exact' };
+  // Only search for partial matches if BOTH fields provided
+  if (n && r) {
+    for (const t of sorted) {
+      const tn = normName(t.userName);
+      const tr = normRoom(t.userRoom);
+      if (tn === n && tr !== r && !nameOnly) nameOnly = t;
+      if (tr === r && tn !== n && !roomOnly) roomOnly = t;
+      if (nameOnly && roomOnly) break;
+    }
+    if (nameOnly) return { match: nameOnly, reason: 'nameOnly' };
+    if (roomOnly) return { match: roomOnly, reason: 'roomOnly' };
+  }
+  return null;
+}
+
+let _lastVisitTimer = null;
+function checkLastVisit() {
+  // Debounce keystrokes so we don't recompute on every letter
+  clearTimeout(_lastVisitTimer);
+  _lastVisitTimer = setTimeout(renderLastVisit, 180);
+}
+
+function renderLastVisit() {
+  const el = document.getElementById('lastVisitPanel');
+  if (!el) return;
+  const name = (document.getElementById('issueSuName')?.value || '').trim();
+  const room = (document.getElementById('issueSuRoom')?.value || '').trim();
+  // Only show once both fields have something
+  if (!name || !room) { el.innerHTML = ''; return; }
+
+  const result = findLastVisit(name, room);
+
+  if (!result) {
+    el.innerHTML = `
+      <div class="last-visit-card new">
+        <div class="last-visit-head">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+          New service user
+        </div>
+        <div class="last-visit-sub">No previous record found for this name + room. First visit.</div>
+      </div>`;
+    return;
+  }
+
+  const { match, reason } = result;
+  const items = Array.isArray(match.items) ? match.items : [];
+  const chips = items.slice(0, 8).map(it =>
+    `<span class="last-visit-chip"><b>${it.qty}&times;</b>${it.name}</span>`
+  ).join('');
+  const more = items.length > 8 ? `<span class="last-visit-chip">+${items.length - 8} more</span>` : '';
+
+  let cls = '', headIcon = '', headText = '', sub = '';
+
+  if (reason === 'exact') {
+    cls = '';
+    headIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>';
+    headText = `Last visit &middot; ${timeAgo(match.date)}`;
+    sub = `Issued by <b>${match.staffName || 'unknown'}</b> on ${formatDate(match.date)}${match.notes ? ` &middot; "${match.notes}"` : ''}`;
+  } else if (reason === 'nameOnly') {
+    cls = 'warn';
+    headIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>';
+    headText = `Same name &middot; different room`;
+    sub = `Last record was Room <b>${match.userRoom || '?'}</b> (not ${room}) &middot; ${timeAgo(match.date)}. Double-check it's the same person.`;
+  } else if (reason === 'roomOnly') {
+    cls = 'warn';
+    headIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>';
+    headText = `Different name for Room ${room}`;
+    sub = `Last person in Room ${room} was <b>${match.userName}</b> &middot; ${timeAgo(match.date)}. New occupant?`;
+  }
+
+  el.innerHTML = `
+    <div class="last-visit-card ${cls}">
+      <div class="last-visit-head">${headIcon}${headText}</div>
+      <div class="last-visit-sub">${sub}</div>
+      ${items.length ? `<div class="last-visit-items">${chips}${more}</div>` : ''}
+    </div>`;
+}
+
 function goToIssueStep2() {
   const name = (document.getElementById('issueSuName')?.value || '').trim();
   const room = (document.getElementById('issueSuRoom')?.value || '').trim();
@@ -2172,13 +2337,14 @@ function renderIssueStep() {
         <div style="display:flex; gap:8px;">
           <div class="form-group" style="flex:1;">
             <label class="form-label">Room No. *</label>
-            <input class="form-control" id="issueSuRoom" placeholder="e.g. 204" value="${issueState.userRoom || ''}" style="font-size:1.1rem; font-weight:600; text-align:center;">
+            <input class="form-control" id="issueSuRoom" placeholder="e.g. 204" value="${issueState.userRoom || ''}" oninput="checkLastVisit()" style="font-size:1.1rem; font-weight:600; text-align:center;">
           </div>
           <div class="form-group" style="flex:2;">
             <label class="form-label">Service User Name *</label>
-            <input class="form-control" id="issueSuName" placeholder="Service user name" value="${issueState.userName || ''}">
+            <input class="form-control" id="issueSuName" placeholder="Service user name" value="${issueState.userName || ''}" oninput="checkLastVisit()">
           </div>
         </div>
+        <div id="lastVisitPanel"></div>
         <div class="form-group">
           <label class="form-label">Staff Name *</label>
           <input class="form-control" id="issueStaffName" placeholder="Your name" value="${issueState.staffName || ''}">
@@ -2189,6 +2355,8 @@ function renderIssueStep() {
         </div>
         <button class="btn btn-primary btn-block" onclick="goToIssueStep2()" style="font-size:1rem; padding:14px;">Next: Select Items</button>
       </div>`;
+    // If we're re-entering step 1 (e.g. from "Change" button), user/room are already set — show panel
+    if (issueState.userName && issueState.userRoom) renderLastVisit();
 
   } else if (issueState.step === 2) {
     el.innerHTML = `
