@@ -1,11 +1,11 @@
 {
-  "name": "Generic Inventory Manager",
-  "short_name": "Inventory",
-  "description": "Personal Inventory Management App",
+  "name": "SOS Property Inventory",
+  "short_name": "SOS Inventory",
+  "description": "SOS Property inventory management app",
   "start_url": "./index.html",
   "display": "standalone",
-  "background_color": "#f0f4f8",
-  "theme_color": "#2563eb",
+  "background_color": "#0f172a",
+  "theme_color": "#4f46e5",
   "orientation": "portrait",
   "icons": [
     {
