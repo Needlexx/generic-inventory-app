@@ -669,6 +669,55 @@ select.form-control {
   letter-spacing: 0.02em;
 }
 
+/* ========== PASSWORD FIELD WRAPPER ========== */
+.pw-wrap { position: relative; }
+.pw-wrap input { padding-right: 44px; }
+.pw-toggle {
+  position: absolute; right: 6px; top: 50%;
+  transform: translateY(-50%);
+  background: transparent; border: none;
+  color: var(--text-light);
+  cursor: pointer;
+  padding: 8px;
+  border-radius: 8px;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: all 0.15s;
+}
+.pw-toggle:hover { color: var(--primary-dark); background: var(--bg); }
+.pw-toggle:active { transform: translateY(-50%) scale(0.94); }
+
+/* ========== STOCK COUNT ========== */
+.count-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--divider);
+}
+.count-row:last-child { border-bottom: none; }
+.count-row input[type="number"] {
+  width: 74px; padding: 8px 10px;
+  border: 1.5px solid var(--border); border-radius: 10px;
+  font-size: 0.92rem; font-weight: 700; text-align: center;
+  font-family: var(--font); background: white;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.count-row input[type="number"]:focus {
+  outline: none;
+  border-color: var(--primary-light);
+  box-shadow: 0 0 0 3px rgba(99,102,241,0.12);
+}
+.count-var {
+  min-width: 48px; text-align: center;
+  font-weight: 800; font-size: 0.92rem;
+  letter-spacing: -0.02em;
+}
+.count-summary {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--divider);
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 0.78rem;
+}
+.count-summary .val { font-weight: 800; color: var(--text); font-size: 0.92rem; margin-left: 4px; }
+
 /* ========== ROLE BADGE (header) ========== */
 #roleBadge {
   display: none; margin-left: 6px;
@@ -759,6 +808,30 @@ select.form-control {
     <button id="addItemBtn" class="btn btn-primary btn-block" onclick="openAddItemModal()" style="margin-top:10px; display:none;">+ Add New Item</button>
   </div>
 
+  <!-- === STOCK COUNT TAB === -->
+  <div class="tab-page" id="pageCount">
+    <div class="card">
+      <h3 style="font-size:1rem; font-weight:700; margin-bottom:4px; letter-spacing:-0.02em;">Stock Count</h3>
+      <p style="font-size:0.8rem; color:var(--text-light); margin-bottom:12px; line-height:1.5;">Physically count stock and enter the actual quantity. Variance = counted &minus; system.</p>
+      <input class="form-control" id="countSearch" placeholder="Search items..." oninput="renderCount()" style="margin-bottom:8px;">
+      <div class="cat-pills" id="countCatPills"></div>
+    </div>
+    <div class="card" style="padding:0;">
+      <div class="count-summary">
+        <div style="color:var(--text-light);">Counted <span class="val" id="countedCount">0</span> / <span class="val" id="totalCount">0</span></div>
+        <div style="color:var(--text-light);">Variance <span class="val" id="totalVariance">0</span></div>
+      </div>
+      <div id="countList"></div>
+    </div>
+    <div style="display:flex; gap:8px; margin-top:10px;">
+      <button class="btn btn-outline" onclick="resetCount()" style="flex:1;">Reset</button>
+      <button class="btn btn-success" onclick="downloadCountExcel()" style="flex:1;">Export Excel</button>
+    </div>
+    <button id="applyCountBtn" class="btn btn-warning btn-block" onclick="applyCountVariance()" style="margin-top:10px; display:none;">
+      Apply Variance to Stock
+    </button>
+  </div>
+
   <!-- === HISTORY TAB === -->
   <div class="tab-page" id="pageHistory">
     <div class="card" style="padding:10px 12px;">
@@ -827,6 +900,10 @@ select.form-control {
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
     Stock
   </button>
+  <button class="tab-btn" onclick="switchTab('Count')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+    Count
+  </button>
   <button class="tab-btn" onclick="switchTab('History')">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
     History
@@ -884,6 +961,8 @@ function applyRoleUI() {
   }
   const addBtn = document.getElementById('addItemBtn');
   if (addBtn) addBtn.style.display = asm ? '' : 'none';
+  const applyBtn = document.getElementById('applyCountBtn');
+  if (applyBtn) applyBtn.style.display = asm ? '' : 'none';
 }
 
 /* =================================================================
@@ -1368,10 +1447,11 @@ function switchTab(name) {
   document.querySelectorAll('.tab-page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   document.getElementById('page' + name).classList.add('active');
-  document.querySelectorAll('.tab-btn')[['Issue','Stock','History','Dashboard','Reports'].indexOf(name)].classList.add('active');
+  document.querySelectorAll('.tab-btn')[['Issue','Stock','Count','History','Dashboard','Reports'].indexOf(name)].classList.add('active');
 
   if (name === 'Issue') initIssueFlow();
   if (name === 'Stock') renderInventory();
+  if (name === 'Count') renderCount();
   if (name === 'History') renderHistory();
   if (name === 'Dashboard') renderDashboard();
   if (name === 'Reports') { initReports(); renderArchive(); }
@@ -1602,6 +1682,173 @@ function deleteItem(id) {
 }
 
 /* =================================================================
+   STOCK COUNT — physical audit with variance
+   ================================================================= */
+let countState = {};          // { [itemId]: { actual:int, counted:bool } }
+let countCat = 'All';
+
+function renderCountCatPills() {
+  const el = document.getElementById('countCatPills');
+  if (!el) return;
+  const cats = ['All', ...CATEGORIES];
+  el.innerHTML = cats.map(c =>
+    `<div class="cat-pill ${countCat === c ? 'active' : ''}" onclick="countCat='${c}'; renderCount();">${c}</div>`
+  ).join('');
+}
+
+function renderCount() {
+  renderCountCatPills();
+  const search = (document.getElementById('countSearch')?.value || '').toLowerCase().trim();
+  let items = getItems();
+  if (countCat !== 'All') items = items.filter(i => i.category === countCat);
+  if (search) items = items.filter(i => (i.name + ' ' + (i.productCode || '') + ' ' + i.category).toLowerCase().includes(search));
+  items.sort((a, b) => a.name.localeCompare(b.name));
+
+  const el = document.getElementById('countList');
+  if (!el) return;
+  if (items.length === 0) {
+    el.innerHTML = '<div style="padding:28px; text-align:center; color:var(--text-light); font-size:0.85rem;">No items match</div>';
+    updateCountSummary();
+    return;
+  }
+  el.innerHTML = items.map(i => {
+    const s = countState[i.id];
+    const actual = s && s.counted ? s.actual : '';
+    const variance = s && s.counted ? (s.actual - i.quantity) : null;
+    const varColor = variance === null ? 'var(--text-softer)' : variance === 0 ? 'var(--success)' : variance > 0 ? 'var(--info)' : 'var(--danger)';
+    const varText = variance === null ? '—' : (variance > 0 ? '+' : '') + variance;
+    return `<div class="count-row" data-id="${i.id}">
+      <div style="flex:1; min-width:0;">
+        <div style="font-weight:600; font-size:0.9rem; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${i.name}</div>
+        <div style="font-size:0.72rem; color:var(--text-light); margin-top:2px;">${i.category} &middot; System: <span style="font-weight:700; color:var(--text-muted);">${i.quantity}</span> ${i.unit || 'pcs'}</div>
+      </div>
+      <input type="number" min="0" inputmode="numeric"
+        placeholder="Count"
+        value="${actual}"
+        oninput="setCountActual('${i.id}', this.value, this.closest('.count-row'))"
+        aria-label="Actual count for ${i.name}">
+      <div class="count-var" style="color:${varColor};">${varText}</div>
+    </div>`;
+  }).join('');
+  updateCountSummary();
+}
+
+function setCountActual(id, val, rowEl) {
+  if (val === '' || val === null || val === undefined) {
+    delete countState[id];
+  } else {
+    const n = parseInt(val);
+    if (isNaN(n) || n < 0) return;
+    countState[id] = { actual: n, counted: true };
+  }
+  // Update just this row's variance cell (no full re-render — preserves focus)
+  if (rowEl) {
+    const items = getItems();
+    const it = items.find(i => i.id === id);
+    const varEl = rowEl.querySelector('.count-var');
+    if (it && varEl) {
+      const s = countState[id];
+      if (!s || !s.counted) {
+        varEl.textContent = '—';
+        varEl.style.color = 'var(--text-softer)';
+      } else {
+        const v = s.actual - it.quantity;
+        varEl.textContent = (v > 0 ? '+' : '') + v;
+        varEl.style.color = v === 0 ? 'var(--success)' : v > 0 ? 'var(--info)' : 'var(--danger)';
+      }
+    }
+  }
+  updateCountSummary();
+}
+
+function updateCountSummary() {
+  const items = getItems();
+  const counted = Object.values(countState).filter(s => s.counted).length;
+  const total = items.length;
+  let totalVar = 0;
+  items.forEach(i => {
+    const s = countState[i.id];
+    if (s && s.counted) totalVar += (s.actual - i.quantity);
+  });
+  const cEl = document.getElementById('countedCount');
+  const tEl = document.getElementById('totalCount');
+  const vEl = document.getElementById('totalVariance');
+  if (cEl) cEl.textContent = counted;
+  if (tEl) tEl.textContent = total;
+  if (vEl) {
+    vEl.textContent = (totalVar > 0 ? '+' : '') + totalVar;
+    vEl.style.color = totalVar === 0 ? 'var(--text)' : totalVar > 0 ? 'var(--info)' : 'var(--danger)';
+  }
+}
+
+function resetCount() {
+  if (Object.keys(countState).length === 0) { toast('Nothing to reset'); return; }
+  showConfirm('Reset count?', 'Clears all counts you\'ve entered. This does not change stock.', () => {
+    countState = {};
+    renderCount();
+    toast('Count reset');
+  });
+}
+
+function downloadCountExcel() {
+  const items = getItems();
+  const counted = items.filter(i => countState[i.id]?.counted);
+  if (!counted.length) { toast('Enter at least one count first', 'warning'); return; }
+  const rows = [['Item', 'Category', 'Unit', 'System Qty', 'Counted Qty', 'Variance', 'Status']];
+  items.sort((a, b) => a.category.localeCompare(b.category) || a.name.localeCompare(b.name));
+  let short = 0, surplus = 0, ok = 0;
+  items.forEach(i => {
+    const s = countState[i.id];
+    if (!s || !s.counted) return;
+    const v = s.actual - i.quantity;
+    const status = v === 0 ? 'OK' : v > 0 ? 'Surplus' : 'Short';
+    if (v === 0) ok++; else if (v > 0) surplus++; else short++;
+    rows.push([i.name, i.category, i.unit || 'pcs', i.quantity, s.actual, v, status]);
+  });
+  rows.push([]);
+  rows.push(['Summary', '', '', '', '', '', '']);
+  rows.push(['OK', ok]);
+  rows.push(['Surplus (+)', surplus]);
+  rows.push(['Short (-)', short]);
+  rows.push(['Total counted', counted.length]);
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = [{ wch: 35 }, { wch: 18 }, { wch: 10 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Stock Count');
+  XLSX.writeFile(wb, `Stock_Count_${today()}.xlsx`);
+  toast('Count exported!', 'success');
+}
+
+function applyCountVariance() {
+  if (!requireASM('Only ASM can apply stock variance')) return;
+  const items = getItems();
+  const affected = [];
+  items.forEach(i => {
+    const s = countState[i.id];
+    if (s && s.counted && s.actual !== i.quantity) {
+      affected.push({ id: i.id, name: i.name, from: i.quantity, to: s.actual });
+    }
+  });
+  if (!affected.length) { toast('No variance to apply', 'warning'); return; }
+  const preview = affected.slice(0, 6).map(a => `${a.name}: ${a.from} → ${a.to}`).join('\n') + (affected.length > 6 ? `\n...and ${affected.length - 6} more` : '');
+  showConfirm(`Apply variance to ${affected.length} item(s)?`, preview + '\n\nStock will be updated to match your counts.', () => {
+    const allItems = getItems();
+    affected.forEach(a => {
+      const idx = allItems.findIndex(x => x.id === a.id);
+      if (idx >= 0) {
+        allItems[idx].quantity = a.to;
+        pushItem(allItems[idx]);
+      }
+    });
+    saveItems(allItems);
+    countState = {};
+    syncInventory();
+    renderCount();
+    toast(`Updated ${affected.length} item(s)`, 'success');
+  });
+}
+
+/* =================================================================
    ISSUE FLOW
    ================================================================= */
 let issueState = { step: 1, userName: '', userRoom: '', staffName: '', selectedItems: {}, photo: null, photoId: null, notes: '' };
@@ -1819,7 +2066,7 @@ async function confirmIssue() {
       try { await savePhoto(txnId, issueState.photo); } catch(_) {}
     } catch(e) {
       console.error('Photo upload error:', e);
-      toast('Photo could not be uploaded — issue saved without photo', 'warning');
+      toast('Photo upload failed: ' + (e.message || 'unknown'), 'error');
       photoPath = null;
     }
   }
@@ -2294,6 +2541,13 @@ function openBackupModal() {
       </button>
       <p style="font-size:0.75rem; color:var(--text-light); margin-top:8px; text-align:center;">Restores all data including photos from a backup file</p>
     </div>
+    <div style="border-top:1px solid var(--border); padding-top:12px; margin-top:12px;">
+      <button class="btn btn-outline btn-block" onclick="testPhotoUpload()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+        Test Photo Upload
+      </button>
+      <p style="font-size:0.75rem; color:var(--text-light); margin-top:8px; text-align:center;">Uploads a tiny test image to Supabase to diagnose photo errors</p>
+    </div>
   `);
 }
 
@@ -2438,7 +2692,12 @@ function showLoginScreen(errorMsg) {
       </div>
       <div class="form-group">
         <label class="form-label">Password</label>
-        <input class="form-control" type="password" id="loginPassword" autocomplete="current-password" placeholder="&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;">
+        <div class="pw-wrap">
+          <input class="form-control" type="password" id="loginPassword" autocomplete="current-password" placeholder="&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;">
+          <button type="button" class="pw-toggle" id="pwToggleBtn" onclick="togglePwVisibility('loginPassword', 'pwToggleBtn')" aria-label="Show password" tabindex="-1">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          </button>
+        </div>
       </div>
       <button class="btn btn-primary btn-block" id="loginBtn" onclick="doLogin()" style="margin-top:4px; padding:13px;">Sign in</button>
       <div class="login-footer">Managed by SOS Property &bull; Secure login</div>
@@ -2450,6 +2709,18 @@ function showLoginScreen(errorMsg) {
   if (pw) pw.addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
   const em = document.getElementById('loginEmail');
   if (em) em.addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('loginPassword')?.focus(); });
+}
+
+function togglePwVisibility(inputId, btnId) {
+  const inp = document.getElementById(inputId);
+  const btn = document.getElementById(btnId);
+  if (!inp || !btn) return;
+  const showing = inp.type === 'text';
+  inp.type = showing ? 'password' : 'text';
+  btn.setAttribute('aria-label', showing ? 'Show password' : 'Hide password');
+  btn.innerHTML = showing
+    ? `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`
+    : `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>`;
 }
 
 async function doLogin() {
@@ -2584,14 +2855,72 @@ async function compressPhotoDataUrl(dataUrl, maxEdge = 1200, quality = 0.8) {
 }
 
 async function uploadPhotoToCloud(dataUrl, txnId) {
+  // Verify auth first — expired sessions cause cryptic 401s
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) throw new Error('Not signed in. Please sign out and sign back in.');
+
   const blob = await compressPhotoDataUrl(dataUrl);
+  if (!blob) throw new Error('Could not compress photo — file may be corrupt.');
+
   const path = `${txnId}.jpg`;
   const { error } = await sb.storage.from(PHOTO_BUCKET).upload(path, blob, {
     contentType: 'image/jpeg',
     upsert: true
   });
-  if (error) throw error;
+
+  if (error) {
+    console.error('Supabase upload error:', error);
+    const m = ((error.message || '') + ' ' + (error.statusCode || '')).toLowerCase();
+    if (m.includes('bucket not found') || m.includes('404')) {
+      throw new Error(`Storage bucket "${PHOTO_BUCKET}" missing. Create it in Supabase dashboard → Storage → New bucket (private).`);
+    }
+    if (m.includes('row-level security') || m.includes('policy') || m.includes('403') || m.includes('permission') || m.includes('unauthorized') || m.includes('authorized')) {
+      throw new Error('Storage permissions missing. Re-run the "STORAGE BUCKET POLICIES" section of supabase-setup.sql in the SQL editor.');
+    }
+    if (m.includes('jwt') || m.includes('401') || m.includes('token') || m.includes('expired')) {
+      throw new Error('Session expired. Sign out and sign back in.');
+    }
+    if (m.includes('payload') || m.includes('large') || m.includes('413')) {
+      throw new Error('Photo too large. Try a smaller image.');
+    }
+    if (m.includes('network') || m.includes('failed to fetch')) {
+      throw new Error('Network error — check your internet and try again.');
+    }
+    throw new Error(error.message || 'Unknown storage error. Open DevTools Console for details.');
+  }
   return path;
+}
+
+async function testPhotoUpload() {
+  // Creates a 1x1 PNG and uploads it to diagnose bucket/policy issues
+  try {
+    showSyncStatus('syncing');
+    const { data: { session } } = await sb.auth.getSession();
+    if (!session) { toast('Not signed in', 'error'); return; }
+    const testBlob = await new Promise(resolve => {
+      const c = document.createElement('canvas');
+      c.width = 8; c.height = 8;
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = '#6366f1'; ctx.fillRect(0, 0, 8, 8);
+      c.toBlob(b => resolve(b), 'image/jpeg', 0.8);
+    });
+    const testPath = `diagnostic-${Date.now()}.jpg`;
+    const { error } = await sb.storage.from(PHOTO_BUCKET).upload(testPath, testBlob, { contentType: 'image/jpeg', upsert: true });
+    if (error) {
+      console.error('Test upload error:', error);
+      toast('Storage test FAILED: ' + (error.message || 'unknown'), 'error');
+      showSyncStatus('error');
+      return;
+    }
+    // Clean up test file
+    await sb.storage.from(PHOTO_BUCKET).remove([testPath]).catch(() => {});
+    toast('Storage is working correctly ✓', 'success');
+    showSyncStatus('synced');
+  } catch (e) {
+    console.error('Test upload exception:', e);
+    toast('Storage test FAILED: ' + (e.message || 'unknown'), 'error');
+    showSyncStatus('error');
+  }
 }
 
 async function getCloudPhotoUrl(path) {
