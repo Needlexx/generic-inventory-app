@@ -960,7 +960,9 @@ select.form-control {
     <div id="dashAlerts"></div>
     <div class="card">
       <h3 style="font-size:0.95rem; margin-bottom:10px;">Stock by Category</h3>
-      <canvas id="dashChart" height="200"></canvas>
+      <div style="position:relative; height:360px; width:100%;">
+        <canvas id="dashChart"></canvas>
+      </div>
     </div>
   </div>
 
@@ -2451,24 +2453,56 @@ function renderDashboard() {
     alertEl.innerHTML = '';
   }
 
-  // Chart
+  // Chart — Stock by Category (pie)
   const catCounts = {};
   CATEGORIES.forEach(c => catCounts[c] = 0);
   items.forEach(i => { if (catCounts[i.category] !== undefined) catCounts[i.category] += i.quantity; });
   const usedCats = Object.entries(catCounts).filter(([,v]) => v > 0);
 
+  // 14-colour palette — bright enough for small slices, harmonises with app's indigo theme
+  const PIE_COLORS = [
+    '#6366f1', '#06b6d4', '#a855f7', '#ec4899', '#f43f5e',
+    '#f59e0b', '#eab308', '#84cc16', '#22c55e', '#14b8a6',
+    '#0ea5e9', '#3b82f6', '#8b5cf6', '#d946ef'
+  ];
+
   if (dashChart) dashChart.destroy();
   const ctx = document.getElementById('dashChart').getContext('2d');
   dashChart = new Chart(ctx, {
-    type: 'bar',
+    type: 'pie',
     data: {
       labels: usedCats.map(([k]) => k),
-      datasets: [{ label: 'Stock Qty', data: usedCats.map(([,v]) => v), backgroundColor: '#3b82f6', borderRadius: 6 }]
+      datasets: [{
+        data: usedCats.map(([,v]) => v),
+        backgroundColor: usedCats.map((_, idx) => PIE_COLORS[idx % PIE_COLORS.length]),
+        borderColor: '#ffffff',
+        borderWidth: 2,
+        hoverOffset: 8
+      }]
     },
     options: {
       responsive: true,
-      plugins: { legend: { display: false } },
-      scales: { y: { beginAtZero: true }, x: { ticks: { font: { size: 10 }, maxRotation: 45 } } }
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          position: 'bottom',
+          labels: {
+            font: { size: 11 },
+            boxWidth: 12,
+            padding: 8,
+            usePointStyle: true
+          }
+        },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => {
+              const total = ctx.dataset.data.reduce((a, b) => a + b, 0);
+              const pct = total > 0 ? ((ctx.parsed / total) * 100).toFixed(1) : '0';
+              return `${ctx.label}: ${ctx.parsed} (${pct}%)`;
+            }
+          }
+        }
+      }
     }
   });
 }
