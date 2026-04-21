@@ -848,7 +848,7 @@ select.form-control {
 }
 
 /* ========== SAVE / SYNC STATUS ========== */
-#saveStatus, #syncStatus {
+#syncStatus {
   font-size: 0.68rem;
   color: rgba(255,255,255,0.75);
   font-weight: 500;
@@ -886,10 +886,6 @@ select.form-control {
     <span id="roleBadge"></span>
   </div>
   <div class="header-right">
-    <div id="saveStatus" style="display:flex; align-items:center; gap:4px;">
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
-      <span>Saved</span>
-    </div>
     <div id="syncStatus" style="display:flex; align-items:center; padding:4px;"></div>
     <button class="header-icon-btn" onclick="openBackupModal()" title="Backup & Restore">
       <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
@@ -1100,7 +1096,6 @@ const UNITS = ['pcs','jars','bottles','boxes','packs','tins','tubes','rolls','pa
 function load(key) { try { return JSON.parse(localStorage.getItem(key)); } catch { return null; } }
 function save(key, data) {
   localStorage.setItem(key, JSON.stringify(data));
-  showSaveStatus();
   // Also mirror to IndexedDB for durability
   mirrorToIndexedDB(key, data);
 }
@@ -1110,22 +1105,6 @@ function getTransactions() { return load(KEYS.transactions) || []; }
 function saveTransactions(txns) { save(KEYS.transactions, txns); }
 function getSettings() { return load(KEYS.settings) || { fridayAutoReport: false }; }
 function saveSettings(s) { save(KEYS.settings, s); }
-
-/* === Save Status Indicator === */
-let saveTimeout = null;
-function showSaveStatus() {
-  const el = document.getElementById('saveStatus');
-  if (!el) return;
-  el.style.color = 'rgba(255,255,255,1)';
-  el.querySelector('span').textContent = 'Saving...';
-  el.querySelector('svg').style.stroke = '#fbbf24';
-  clearTimeout(saveTimeout);
-  saveTimeout = setTimeout(() => {
-    el.querySelector('span').textContent = 'Saved';
-    el.querySelector('svg').style.stroke = '#22c55e';
-    el.style.color = 'rgba(255,255,255,0.8)';
-  }, 500);
-}
 
 /* =================================================================
    CLOUD SYNC STATUS INDICATOR
