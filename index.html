@@ -890,7 +890,7 @@ select.form-control {
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
       <span>Saved</span>
     </div>
-    <div id="syncStatus" style="display:flex; align-items:center; cursor:pointer; padding:4px;" onclick="openSheetsSetup()"></div>
+    <div id="syncStatus" style="display:flex; align-items:center; padding:4px;"></div>
     <button class="header-icon-btn" onclick="openBackupModal()" title="Backup & Restore">
       <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
     </button>
@@ -1128,242 +1128,24 @@ function showSaveStatus() {
 }
 
 /* =================================================================
-   GOOGLE SHEETS LIVE SYNC
+   CLOUD SYNC STATUS INDICATOR
    ================================================================= */
-let sheetsUrl = null;
-let syncQueue = [];
-let isSyncing = false;
-
-function getSheetsUrl() {
-  if (sheetsUrl) return sheetsUrl;
-  sheetsUrl = localStorage.getItem('sheets_sync_url') || null;
-  return sheetsUrl;
-}
-
-function setSheetsUrl(url) {
-  sheetsUrl = url;
-  localStorage.setItem('sheets_sync_url', url);
-}
-
 function showSyncStatus(status) {
   const el = document.getElementById('syncStatus');
   if (!el) return;
   if (status === 'syncing') {
     el.innerHTML = '<div class="spinner" style="width:12px;height:12px;border-width:2px;border-color:rgba(255,255,255,0.3);border-top-color:#fbbf24;"></div>';
-    el.title = 'Syncing to Google Sheets...';
+    el.title = 'Syncing to cloud...';
   } else if (status === 'synced') {
     el.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>';
-    el.title = 'Synced to Google Sheets';
+    el.title = 'Synced to cloud';
   } else if (status === 'error') {
     el.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="3"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>';
-    el.title = 'Sync failed — tap to retry';
+    el.title = 'Sync failed — check your connection';
   } else if (status === 'offline') {
     el.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.4)" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>';
-    el.title = 'Google Sheets not connected';
+    el.title = 'Offline — will sync when reconnected';
   }
-}
-
-async function syncToSheets(action, payload) {
-  const url = getSheetsUrl();
-  if (!url) return; // Not connected
-
-  syncQueue.push({ action, payload, timestamp: Date.now() });
-  if (isSyncing) return; // Will process queue after current sync
-
-  processSyncQueue();
-}
-
-async function processSyncQueue() {
-  const url = getSheetsUrl();
-  if (!url || syncQueue.length === 0) return;
-  isSyncing = true;
-  showSyncStatus('syncing');
-
-  while (syncQueue.length > 0) {
-    const item = syncQueue.shift();
-    try {
-      const resp = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain' },
-        body: JSON.stringify(item)
-      });
-      if (!resp.ok) {
-        console.error('Sheets sync error:', resp.status);
-        showSyncStatus('error');
-      }
-    } catch(e) {
-      console.error('Sheets sync failed:', e);
-      // Put it back in queue for retry
-      syncQueue.unshift(item);
-      showSyncStatus('error');
-      isSyncing = false;
-      // Retry after 30 seconds
-      setTimeout(() => processSyncQueue(), 30000);
-      return;
-    }
-  }
-
-  isSyncing = false;
-  showSyncStatus('synced');
-}
-
-function syncTransaction(txn) {
-  const items = getItems();
-  // Send each item as a separate row
-  txn.items.forEach(ti => {
-    const invItem = items.find(i => i.id === ti.itemId);
-    syncToSheets('transaction', {
-      date: new Date(txn.date).toLocaleDateString('en-GB'),
-      time: new Date(txn.date).toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' }),
-      staff: txn.staffName || '',
-      serviceUser: txn.userName,
-      room: txn.userRoom || '',
-      productCode: invItem?.productCode || '',
-      itemName: ti.name,
-      quantity: ti.qty,
-      unit: ti.unit || 'pcs',
-      currentStock: invItem?.quantity || 0,
-      notes: txn.notes || ''
-    });
-  });
-
-  // Also sync full inventory snapshot
-  syncInventory();
-}
-
-function syncInventory() {
-  const items = getItems();
-  syncToSheets('inventory', {
-    items: items.map(i => ({
-      name: i.name,
-      category: i.category,
-      quantity: i.quantity,
-      unit: i.unit || 'pcs',
-      minStock: i.minStock || 5,
-      maxStock: i.maxStock || 20,
-      productCode: i.productCode || '',
-      status: stockStatus(i).label
-    }))
-  });
-}
-
-function openSheetsSetup() {
-  const currentUrl = getSheetsUrl();
-  openModal(`
-    <div class="modal-header"><h3>&#128203; Google Sheets Sync</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
-    ${currentUrl
-      ? `<div class="card" style="border-left:4px solid var(--success); margin-bottom:12px;">
-          <div style="display:flex; align-items:center; gap:8px;">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
-            <span style="font-weight:600; color:var(--success);">Connected to Google Sheets</span>
-          </div>
-          <p style="font-size:0.75rem; color:var(--text-light); margin-top:4px; word-break:break-all;">${currentUrl.slice(0, 60)}...</p>
-        </div>
-        <button class="btn btn-primary btn-block" onclick="syncInventory(); closeModal(); toast('Syncing full inventory...', 'success');" style="margin-bottom:8px;">Sync Now</button>
-        <button class="btn btn-danger btn-block" onclick="disconnectSheets()">Disconnect</button>`
-      : `<div class="card" style="margin-bottom:12px;">
-          <h4 style="font-size:0.9rem; margin-bottom:8px;">Setup Instructions:</h4>
-          <ol style="font-size:0.82rem; color:var(--text-light); padding-left:20px; line-height:1.8;">
-            <li>Open <a href="https://sheets.google.com" target="_blank" style="color:var(--primary);">Google Sheets</a> and create a new sheet</li>
-            <li>Click <strong>Extensions</strong> > <strong>Apps Script</strong></li>
-            <li>Delete any code there and paste the script (copy from below)</li>
-            <li>Click <strong>Deploy</strong> > <strong>New deployment</strong></li>
-            <li>Type: <strong>Web app</strong>, Access: <strong>Anyone</strong></li>
-            <li>Click <strong>Deploy</strong> and copy the URL</li>
-            <li>Paste the URL below</li>
-          </ol>
-        </div>
-        <div class="card" style="margin-bottom:12px;">
-          <h4 style="font-size:0.9rem; margin-bottom:8px;">Apps Script Code:</h4>
-          <p style="font-size:0.75rem; color:var(--text-light); margin-bottom:8px;">Copy this entire code and paste into Apps Script editor:</p>
-          <textarea id="scriptCode" readonly style="width:100%; height:120px; font-family:monospace; font-size:0.7rem; padding:8px; border:1px solid var(--border); border-radius:8px; background:#f8fafc; resize:none;">${getAppsScriptCode()}</textarea>
-          <button class="btn btn-outline btn-sm" onclick="copyScriptCode()" style="margin-top:6px;">Copy Script</button>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Paste your Web App URL here:</label>
-          <input class="form-control" id="sheetsUrlInput" placeholder="https://script.google.com/macros/s/...">
-        </div>
-        <button class="btn btn-primary btn-block" onclick="connectSheets()">Connect</button>`
-    }
-  `);
-}
-
-function getAppsScriptCode() {
-  return [
-    "function doPost(e) {",
-    "  var sheet = SpreadsheetApp.getActiveSpreadsheet();",
-    "  var data = JSON.parse(e.postData.contents);",
-    "",
-    "  if (data.action === 'transaction') {",
-    "    var txnSheet = sheet.getSheetByName('Transactions');",
-    "    if (!txnSheet) {",
-    "      txnSheet = sheet.insertSheet('Transactions');",
-    "      txnSheet.appendRow(['Date','Time','Staff','Service User','Room','Product Code','Item Name','Quantity','Unit','Current Stock','Notes']);",
-    "      txnSheet.getRange(1,1,1,11).setFontWeight('bold').setBackground('#2563eb').setFontColor('white');",
-    "      txnSheet.setFrozenRows(1);",
-    "    }",
-    "    var p = data.payload;",
-    "    txnSheet.appendRow([p.date, p.time, p.staff, p.serviceUser, p.room, p.productCode, p.itemName, p.quantity, p.unit, p.currentStock, p.notes]);",
-    "  }",
-    "",
-    "  if (data.action === 'inventory') {",
-    "    var invSheet = sheet.getSheetByName('Live Stock');",
-    "    if (!invSheet) {",
-    "      invSheet = sheet.insertSheet('Live Stock');",
-    "    }",
-    "    invSheet.clear();",
-    "    invSheet.appendRow(['Item Name','Category','Current Qty','Unit','Min Stock','Max Stock','Product Code','Status']);",
-    "    invSheet.getRange(1,1,1,8).setFontWeight('bold').setBackground('#2563eb').setFontColor('white');",
-    "    invSheet.setFrozenRows(1);",
-    "    var items = data.payload.items;",
-    "    for (var i = 0; i < items.length; i++) {",
-    "      var it = items[i];",
-    "      invSheet.appendRow([it.name, it.category, it.quantity, it.unit, it.minStock, it.maxStock, it.productCode, it.status]);",
-    "    }",
-    "    invSheet.autoResizeColumns(1, 8);",
-    "  }",
-    "",
-    "  return ContentService.createTextOutput(JSON.stringify({status:'ok'})).setMimeType(ContentService.MimeType.JSON);",
-    "}",
-    "",
-    "function doGet(e) {",
-    "  return ContentService.createTextOutput('Inventory Sync Active').setMimeType(ContentService.MimeType.TEXT);",
-    "}"
-  ].join('\n');
-}
-
-function copyScriptCode() {
-  const ta = document.getElementById('scriptCode');
-  ta.select();
-  navigator.clipboard.writeText(ta.value).then(() => toast('Script copied!', 'success')).catch(() => {
-    ta.select();
-    document.execCommand('copy');
-    toast('Script copied!', 'success');
-  });
-}
-
-function connectSheets() {
-  const url = document.getElementById('sheetsUrlInput')?.value.trim();
-  if (!url || !url.startsWith('https://script.google.com')) {
-    toast('Please paste a valid Google Apps Script URL', 'warning');
-    return;
-  }
-  setSheetsUrl(url);
-  closeModal();
-  showSyncStatus('synced');
-  toast('Connected to Google Sheets!', 'success');
-  // Do initial full sync
-  syncInventory();
-}
-
-function disconnectSheets() {
-  closeModal();
-  showConfirm('Disconnect Google Sheets', 'This will stop syncing data to Google Sheets. Your local data will not be affected.', () => {
-    localStorage.removeItem('sheets_sync_url');
-    sheetsUrl = null;
-    showSyncStatus('offline');
-    toast('Disconnected from Google Sheets');
-  });
 }
 
 /* === Persistent Storage — ask browser to never delete data === */
@@ -1649,7 +1431,6 @@ function adjustQty(id, delta) {
   items[idx].quantity = Math.max(0, items[idx].quantity + delta);
   saveItems(items);
   pushItem(items[idx]);
-  syncInventory();
   renderInventory();
 }
 
@@ -1716,7 +1497,6 @@ function addItem() {
   items.push(newItem);
   saveItems(items);
   pushItem(newItem);
-  syncInventory();
   closeModal();
   renderInventory();
   toast('Item added!', 'success');
@@ -1786,7 +1566,6 @@ function saveEditItem(id) {
   items[idx].productCode = document.getElementById('editItemCode').value.trim();
   saveItems(items);
   pushItem(items[idx]);
-  syncInventory();
   closeModal();
   renderInventory();
   toast('Item updated!', 'success');
@@ -1799,7 +1578,6 @@ function deleteItem(id) {
     const items = getItems().filter(i => i.id !== id);
     saveItems(items);
     pushItemDelete(id);
-    syncInventory();
     renderInventory();
     toast('Item deleted');
   });
@@ -2162,7 +1940,6 @@ function applyCountVariance() {
     });
     saveItems(allItems);
     countState = {};
-    syncInventory();
     renderCount();
     toast(`Updated ${affected.length} item(s)`, 'success');
   });
@@ -2534,8 +2311,6 @@ async function confirmIssue() {
     pushTransaction(txn),
     ...updatedItems.map(it => pushItem(it))
   ]);
-
-  syncTransaction(txn);
 
   issueState.step = 4;
   renderIssueStep();
