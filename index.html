@@ -2960,7 +2960,17 @@ function openChangePasswordModal(isRecovery) {
       <h3>${isRecovery ? 'Set a new password' : 'Change password'}</h3>
       ${isRecovery ? '' : '<button class="modal-close" onclick="closeModal()">&times;</button>'}
     </div>
-    ${isRecovery ? '<p style="margin-bottom:14px; font-size:0.85rem; color:var(--text-light);">You opened a password reset link. Choose a new password below. You will stay signed in after saving.</p>' : '<p style="margin-bottom:14px; font-size:0.85rem; color:var(--text-light);">Choose a new password for your account. You will stay signed in after saving.</p>'}
+    ${isRecovery ? '<p style="margin-bottom:14px; font-size:0.85rem; color:var(--text-light);">You opened a password reset link. Choose a new password below. You will stay signed in after saving.</p>' : '<p style="margin-bottom:14px; font-size:0.85rem; color:var(--text-light);">Enter your current password, then choose a new one. You will stay signed in after saving.</p>'}
+    ${isRecovery ? '' : `
+    <div class="form-group">
+      <label class="form-label">Current password</label>
+      <div class="pw-wrap">
+        <input type="password" class="form-control" id="cpwCurrent" autocomplete="current-password" placeholder="Your current password">
+        <button type="button" class="pw-toggle" id="cpwCurrentToggle" onclick="togglePwVisibility('cpwCurrent','cpwCurrentToggle')" aria-label="Show password" tabindex="-1">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+        </button>
+      </div>
+    </div>`}
     <div class="form-group">
       <label class="form-label">New password</label>
       <div class="pw-wrap">
@@ -2986,8 +2996,10 @@ function openChangePasswordModal(isRecovery) {
     </div>
   `);
   setTimeout(() => {
-    document.getElementById('cpwNew')?.focus();
-    ['cpwNew', 'cpwConfirm'].forEach(id => {
+    // Focus the first visible field — current password if self-service, new password if recovery
+    const firstId = isRecovery ? 'cpwNew' : 'cpwCurrent';
+    document.getElementById(firstId)?.focus();
+    ['cpwCurrent', 'cpwNew', 'cpwConfirm'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.addEventListener('keydown', e => { if (e.key === 'Enter') savePasswordChange(); });
     });
@@ -2995,25 +3007,57 @@ function openChangePasswordModal(isRecovery) {
 }
 
 async function savePasswordChange() {
+  const isRecovery = isRecoveryMode;
+  const curEl = document.getElementById('cpwCurrent');
+  const cur = curEl ? (curEl.value || '') : '';
   const np = document.getElementById('cpwNew')?.value || '';
   const cp = document.getElementById('cpwConfirm')?.value || '';
   const errEl = document.getElementById('cpwErr');
   const showErr = msg => { if (errEl) { errEl.textContent = msg; errEl.style.display = 'block'; } };
-  if (np.length < 8) return showErr('Password must be at least 8 characters.');
-  if (np !== cp) return showErr('Passwords do not match.');
+  const hideErr = () => { if (errEl) { errEl.style.display = 'none'; } };
+  hideErr();
+
+  // Self-service change requires current password
+  if (!isRecovery && !cur) return showErr('Enter your current password.');
+  if (np.length < 8) return showErr('New password must be at least 8 characters.');
+  if (np !== cp) return showErr('New passwords do not match.');
+  if (!isRecovery && np === cur) return showErr('New password must be different from the current one.');
+
   const btn = document.getElementById('cpwSaveBtn');
   if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Saving...'; }
+  const resetBtn = () => { if (btn) { btn.disabled = false; btn.textContent = 'Save password'; } };
+
+  // Step 1 (self-service only): verify the current password by re-signing in.
+  // signInWithPassword refreshes the session on success, so the subsequent
+  // updateUser call runs against a known-good session.
+  if (!isRecovery) {
+    const email = currentUser?.email;
+    if (!email) { showErr('Could not verify your account — please sign out and back in.'); resetBtn(); return; }
+    const { error: signinErr } = await sb.auth.signInWithPassword({ email, password: cur });
+    if (signinErr) {
+      const m = (signinErr.message || '').toLowerCase();
+      if (m.includes('invalid') || m.includes('credentials') || m.includes('password')) {
+        showErr('Current password is incorrect.');
+      } else {
+        showErr(signinErr.message || 'Could not verify current password.');
+      }
+      resetBtn();
+      return;
+    }
+  }
+
+  // Step 2: update password
   const { error } = await sb.auth.updateUser({ password: np });
   if (error) {
     showErr(error.message || 'Could not update password.');
-    if (btn) { btn.disabled = false; btn.textContent = 'Save password'; }
+    resetBtn();
     return;
   }
-  const wasRecovery = isRecoveryMode;
+
   isRecoveryMode = false;
   closeModal();
   toast('Password updated', 'success');
-  if (wasRecovery) {
+  if (isRecovery) {
     // Finish the recovery flow: restore the app UI and pull data
     const mainEl = document.querySelector('main');
     const tabBarEl = document.querySelector('.tab-bar');
