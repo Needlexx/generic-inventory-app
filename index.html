@@ -1009,6 +1009,7 @@ select.form-control {
       </button>
       <div class="user-menu" id="userMenu" style="display:none;" role="menu">
         <div class="user-menu-email" id="userMenuEmail"></div>
+        <div class="user-menu-version" id="userMenuVersion" style="padding:2px 14px 10px; font-size:0.66rem; color:var(--text-light); opacity:0.7; letter-spacing:0.02em;"></div>
         <button class="user-menu-item" id="userMenuCheckPending" style="display:none;" onclick="asmCheckForPending()" role="menuitem">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
           <span>Check for pending counts</span>
@@ -1176,6 +1177,9 @@ select.form-control {
 /* =================================================================
    SUPABASE CONFIG
    ================================================================= */
+// App version — bump alongside sw.js CACHE_NAME so ASM can verify which build
+// their device is actually running (shown under the email in the user menu).
+window.APP_VERSION = 'v36';
 const SUPABASE_URL  = 'https://nogrnsjnwypihjaeulef.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5vZ3Juc2pud3lwaWhqYWV1bGVmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY0MDg2MzQsImV4cCI6MjA5MTk4NDYzNH0.ZxwsWtzzKO_nUSMQpH-FpbA2-5nYH8Nu1IegcKcYjW8';
 const PHOTO_BUCKET  = 'inventory-photos';
@@ -3063,6 +3067,12 @@ function toggleUserMenu(e) {
   btn?.setAttribute('aria-expanded', 'true');
   const emailEl = document.getElementById('userMenuEmail');
   if (emailEl) emailEl.textContent = (currentUser && currentUser.email) || '';
+  // Show the cache version + role so we can diagnose stale-cache / wrong-role issues
+  const verEl = document.getElementById('userMenuVersion');
+  if (verEl) {
+    const role = isASM() ? 'ASM' : 'Welfare';
+    verEl.textContent = `${role} · app ${window.APP_VERSION || 'dev'}`;
+  }
   // Click-away to close (capture so it fires before inner click handlers)
   setTimeout(() => document.addEventListener('click', userMenuClickAway, { capture: true }), 0);
 }
@@ -3415,23 +3425,25 @@ async function markSubmissionStatus(id, newStatus, extraFields) {
     applied_by: (currentUser && currentUser.email) || 'unknown',
     applied_at: new Date().toISOString()
   }, extraFields || {});
-  // .select() makes the call return the updated rows so we can confirm it worked
+  console.log('[stock_counts] Marking', id, '→', newStatus, 'as', payload.applied_by);
+  // .select('*') makes the call return the updated rows so we can confirm it worked
   const { data, error } = await sb
     .from('stock_counts')
     .update(payload)
     .eq('id', id)
-    .select();
+    .select('*');
   if (error) {
-    console.error(`Mark ${newStatus} failed:`, error);
+    console.error(`[stock_counts] Mark ${newStatus} failed:`, error);
     toast(`Could not mark ${newStatus}: ` + (error.message || 'database error'), 'error');
     return false;
   }
   if (!data || !data.length) {
     // Zero rows returned — usually RLS blocking or id mismatch
-    console.error(`Mark ${newStatus} returned no rows — submission ${id} not updated`);
-    toast(`Could not mark ${newStatus}: no row updated (check permissions)`, 'error');
+    console.error(`[stock_counts] Mark ${newStatus} returned no rows — submission ${id} not updated (likely RLS). Check that supabase-setup.sql was re-run.`);
+    toast(`Database blocked the update. Re-run supabase-setup.sql in the SQL Editor.`, 'error');
     return false;
   }
+  console.log(`[stock_counts] Marked ${newStatus} — DB returned`, data[0]);
   return true;
 }
 
@@ -3453,10 +3465,12 @@ async function finishReviewAndContinue(successToast, successType) {
 
 // ASM reviews a submission and applies it — updates items + marks applied
 async function applyStockCountSubmission(id) {
+  console.log('[stock_counts] applyStockCountSubmission called for', id);
   if (!requireASM('Only ASM can apply stock variance')) return;
   try {
     const sub = await getStockCountSubmission(id);
     if (!sub) { toast('Submission not found', 'error'); return; }
+    console.log('[stock_counts] Loaded submission:', { id: sub.id, status: sub.status, submitted_by: sub.submitted_by, count_items: (sub.counts || []).length });
     if (sub.status !== 'pending') {
       // Already processed — just clean up the banner and re-open the list
       toast('This submission has already been processed', 'warning');
@@ -3471,11 +3485,20 @@ async function applyStockCountSubmission(id) {
     const affected = [];
     counts.forEach(c => {
       const idx = allItems.findIndex(x => x.id === c.id);
-      if (idx >= 0 && allItems[idx].quantity !== c.actual) {
-        affected.push({ id: c.id, name: allItems[idx].name, from: allItems[idx].quantity, to: c.actual });
-        allItems[idx].quantity = c.actual;
+      if (idx < 0) {
+        console.warn('[stock_counts] Item not found locally — skipped:', c.id, c.name);
+        return;
+      }
+      // Coerce to Number so a string "5" still equals numeric 5 (prevents false
+      // differences and false matches when counts come from form inputs)
+      const current = Number(allItems[idx].quantity) || 0;
+      const target = Number(c.actual) || 0;
+      if (current !== target) {
+        affected.push({ id: c.id, name: allItems[idx].name, from: current, to: target });
+        allItems[idx].quantity = target;
       }
     });
+    console.log(`[stock_counts] Apply: ${affected.length} of ${counts.length} items will change`, affected);
 
     if (!affected.length) {
       // Nothing to change but still mark as applied so it leaves the queue
@@ -3493,6 +3516,7 @@ async function applyStockCountSubmission(id) {
     saveItems(allItems);
     const results = await Promise.all(pushPromises);
     const failed = results.filter(r => r && r._syncError);
+    console.log(`[stock_counts] Apply: cloud pushes complete, ${failed.length} failed`);
 
     // Mark submission applied — VERIFIED via .select() so we know it actually landed
     const marked = await markSubmissionStatus(id, 'applied');
@@ -3507,14 +3531,16 @@ async function applyStockCountSubmission(id) {
     }
     await finishReviewAndContinue(`Applied ${affected.length} item${affected.length !== 1 ? 's' : ''}`);
   } catch (err) {
-    console.error('applyStockCountSubmission failed:', err);
+    console.error('[stock_counts] applyStockCountSubmission failed:', err);
     toast('Could not apply: ' + (err && err.message ? err.message : 'unknown error'), 'error');
   }
 }
 
 async function dismissStockCountSubmission(id) {
+  console.log('[stock_counts] dismissStockCountSubmission called for', id);
   if (!requireASM('Only ASM can dismiss a submission')) return;
   showConfirm('Dismiss submission?', 'The count will be marked dismissed and removed from the queue without changing stock.', async () => {
+    console.log('[stock_counts] Dismiss confirmed, calling markSubmissionStatus');
     const ok = await markSubmissionStatus(id, 'dismissed');
     if (!ok) return; // error toast already shown
     await finishReviewAndContinue('Submission dismissed');
@@ -4071,8 +4097,22 @@ document.addEventListener('DOMContentLoaded', init);
    PWA — Service Worker
    ================================================================= */
 if ('serviceWorker' in navigator) {
+  // Auto-reload the page when a new Service Worker takes control.
+  // Without this, users keep running the old JS until they manually refresh,
+  // which means bug fixes deployed to main don't reach their device.
+  let swRefreshing = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (swRefreshing) return;
+    swRefreshing = true;
+    console.log('[SW] New version activated — reloading page');
+    window.location.reload();
+  });
   navigator.serviceWorker.register('./sw.js')
-    .then(reg => console.log('SW registered:', reg.scope))
+    .then(reg => {
+      console.log('SW registered:', reg.scope);
+      // Check for updates on every page load
+      reg.update().catch(() => {});
+    })
     .catch(err => console.log('SW failed:', err));
 }
 </script>
