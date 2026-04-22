@@ -3376,13 +3376,65 @@ async function submitCountToASM() {
   return true;
 }
 
+// Mark a submission as applied/dismissed and VERIFY the DB row actually moved.
+// Returns true on success, false if RLS/network silently blocked the update.
+async function markSubmissionStatus(id, newStatus, extraFields) {
+  const payload = Object.assign({
+    status: newStatus,
+    applied_by: (currentUser && currentUser.email) || 'unknown',
+    applied_at: new Date().toISOString()
+  }, extraFields || {});
+  // .select() makes the call return the updated rows so we can confirm it worked
+  const { data, error } = await sb
+    .from('stock_counts')
+    .update(payload)
+    .eq('id', id)
+    .select();
+  if (error) {
+    console.error(`Mark ${newStatus} failed:`, error);
+    toast(`Could not mark ${newStatus}: ` + (error.message || 'database error'), 'error');
+    return false;
+  }
+  if (!data || !data.length) {
+    // Zero rows returned — usually RLS blocking or id mismatch
+    console.error(`Mark ${newStatus} returned no rows — submission ${id} not updated`);
+    toast(`Could not mark ${newStatus}: no row updated (check permissions)`, 'error');
+    return false;
+  }
+  return true;
+}
+
+// After a successful apply/dismiss, close the review modal and either re-open
+// the queue (if more pending) or toast "All clear" so the user SEES progress.
+async function finishReviewAndContinue(successToast, successType) {
+  closeModal();
+  if (typeof renderInventory === 'function') { try { renderInventory(); } catch(_) {} }
+  await refreshPendingSubmissionsBanner();
+  const remaining = await pullStockCountSubmissions();
+  toast(successToast, successType || 'success');
+  if (remaining.length) {
+    // Let user see the toast for a moment before re-opening the list
+    setTimeout(() => { try { openPendingSubmissions(); } catch(_) {} }, 350);
+  } else {
+    setTimeout(() => { toast('All submissions processed', 'success'); }, 450);
+  }
+}
+
 // ASM reviews a submission and applies it — updates items + marks applied
 async function applyStockCountSubmission(id) {
   if (!requireASM('Only ASM can apply stock variance')) return;
   try {
     const sub = await getStockCountSubmission(id);
     if (!sub) { toast('Submission not found', 'error'); return; }
-    if (sub.status !== 'pending') { toast('This submission has already been processed', 'warning'); return; }
+    if (sub.status !== 'pending') {
+      // Already processed — just clean up the banner and re-open the list
+      toast('This submission has already been processed', 'warning');
+      await refreshPendingSubmissionsBanner();
+      const remaining = await pullStockCountSubmissions();
+      closeModal();
+      if (remaining.length) setTimeout(() => openPendingSubmissions(), 250);
+      return;
+    }
     const counts = sub.counts || [];
     const allItems = getItems();
     const affected = [];
@@ -3393,17 +3445,12 @@ async function applyStockCountSubmission(id) {
         allItems[idx].quantity = c.actual;
       }
     });
+
     if (!affected.length) {
       // Nothing to change but still mark as applied so it leaves the queue
-      await sb.from('stock_counts').update({
-        status: 'applied',
-        applied_by: (currentUser && currentUser.email) || 'unknown',
-        applied_at: new Date().toISOString(),
-        note: 'No changes — counts already matched stock'
-      }).eq('id', id);
-      toast('Counts already match stock — marked applied', 'success');
-      closeModal();
-      refreshPendingSubmissionsBanner();
+      const ok = await markSubmissionStatus(id, 'applied', { note: 'No changes — counts already matched stock' });
+      if (!ok) return; // error already toasted; keep modal open so ASM can retry
+      await finishReviewAndContinue('Counts already match stock — marked applied');
       return;
     }
 
@@ -3416,21 +3463,18 @@ async function applyStockCountSubmission(id) {
     const results = await Promise.all(pushPromises);
     const failed = results.filter(r => r && r._syncError);
 
-    // Mark submission applied
-    const { error: markErr } = await sb.from('stock_counts').update({
-      status: 'applied',
-      applied_by: (currentUser && currentUser.email) || 'unknown',
-      applied_at: new Date().toISOString()
-    }).eq('id', id);
-    if (markErr) console.warn('Could not mark submission applied:', markErr);
+    // Mark submission applied — VERIFIED via .select() so we know it actually landed
+    const marked = await markSubmissionStatus(id, 'applied');
+    if (!marked) {
+      // Items were updated locally + cloud, but status didn't flip. Warn loudly.
+      toast('Stock updated but submission could not be marked applied — it will still show until cleared', 'warning');
+      return;
+    }
 
-    closeModal();
-    renderInventory();
-    refreshPendingSubmissionsBanner();
-    toast(`Applied ${affected.length} item${affected.length !== 1 ? 's' : ''}`, 'success');
     if (failed.length) {
       toast(`${failed.length} item(s) failed cloud sync — they will retry`, 'warning');
     }
+    await finishReviewAndContinue(`Applied ${affected.length} item${affected.length !== 1 ? 's' : ''}`);
   } catch (err) {
     console.error('applyStockCountSubmission failed:', err);
     toast('Could not apply: ' + (err && err.message ? err.message : 'unknown error'), 'error');
@@ -3440,15 +3484,9 @@ async function applyStockCountSubmission(id) {
 async function dismissStockCountSubmission(id) {
   if (!requireASM('Only ASM can dismiss a submission')) return;
   showConfirm('Dismiss submission?', 'The count will be marked dismissed and removed from the queue without changing stock.', async () => {
-    const { error } = await sb.from('stock_counts').update({
-      status: 'dismissed',
-      applied_by: (currentUser && currentUser.email) || 'unknown',
-      applied_at: new Date().toISOString()
-    }).eq('id', id);
-    if (error) { toast('Dismiss failed: ' + error.message, 'error'); return; }
-    toast('Submission dismissed', 'success');
-    closeModal();
-    refreshPendingSubmissionsBanner();
+    const ok = await markSubmissionStatus(id, 'dismissed');
+    if (!ok) return; // error toast already shown
+    await finishReviewAndContinue('Submission dismissed');
   });
 }
 
