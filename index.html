@@ -1681,16 +1681,19 @@ function renderCount() {
     const variance = s && s.counted ? (s.actual - i.quantity) : null;
     const varColor = variance === null ? 'var(--text-softer)' : variance === 0 ? 'var(--success)' : variance > 0 ? 'var(--info)' : 'var(--danger)';
     const varText = variance === null ? '—' : (variance > 0 ? '+' : '') + variance;
+    const safeName = (typeof esc === 'function') ? esc(i.name) : i.name;
+    const safeCat = (typeof esc === 'function') ? esc(i.category) : i.category;
+    const safeUnit = (typeof esc === 'function') ? esc(i.unit || 'pcs') : (i.unit || 'pcs');
     return `<div class="count-row" data-id="${i.id}">
       <div style="flex:1; min-width:0;">
-        <div style="font-weight:600; font-size:0.9rem; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${i.name}</div>
-        <div style="font-size:0.72rem; color:var(--text-light); margin-top:2px;">${i.category} &middot; System: <span style="font-weight:700; color:var(--text-muted);">${i.quantity}</span> ${i.unit || 'pcs'}</div>
+        <div style="font-weight:600; font-size:0.9rem; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${safeName}</div>
+        <div style="font-size:0.72rem; color:var(--text-light); margin-top:2px;">${safeCat} &middot; System: <span style="font-weight:700; color:var(--text-muted);">${i.quantity}</span> ${safeUnit}</div>
       </div>
       <input type="number" min="0" inputmode="numeric"
         placeholder="Count"
         value="${actual}"
         oninput="setCountActual('${i.id}', this.value, this.closest('.count-row'))"
-        aria-label="Actual count for ${i.name}">
+        aria-label="Actual count for ${safeName}">
       <div class="count-var" style="color:${varColor};">${varText}</div>
     </div>`;
   }).join('');
@@ -1815,113 +1818,142 @@ function fmtPct(n) {
 function fmtDelta(n) {
   return (n > 0 ? '+' : '') + n;
 }
+// Escape user-supplied strings before embedding in innerHTML so names
+// containing <, >, &, or quotes can't break the report layout.
+function esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
 
 function submitCountReport() {
-  const data = computeVariance();
-  if (!data.items.length) { toast('Enter at least one count first', 'warning'); return; }
+  try {
+    const data = computeVariance();
+    if (!data.items.length) {
+      // Louder, clearer guidance — previous toast was easy to miss.
+      toast('No counts entered yet — type a number next to at least one item first', 'warning');
+      const firstInput = document.querySelector('#countList input[type="number"]');
+      firstInput?.focus();
+      return;
+    }
 
-  const { items, sumSystem, sumActual, netVar, netPct, accuracyPct, absVarPct,
-          okCount, surplusCount, shortCount, cats } = data;
+    const { items, sumSystem, sumActual, netVar, netPct, accuracyPct, absVarPct,
+            okCount, surplusCount, shortCount, cats } = data;
 
-  const shorts = items.filter(i => i.variance < 0).sort((a, b) => a.pct - b.pct).slice(0, 5);
-  const surpluses = items.filter(i => i.variance > 0).sort((a, b) => b.pct - a.pct).slice(0, 5);
+    const shorts = items.filter(i => i.variance < 0).sort((a, b) => a.pct - b.pct).slice(0, 5);
+    const surpluses = items.filter(i => i.variance > 0).sort((a, b) => b.pct - a.pct).slice(0, 5);
 
-  const total = items.length;
-  const okPct = total > 0 ? (okCount / total) * 100 : 0;
-  const surplusPctOfItems = total > 0 ? (surplusCount / total) * 100 : 0;
-  const shortPctOfItems = total > 0 ? (shortCount / total) * 100 : 0;
+    const total = items.length;
+    const okPct = total > 0 ? (okCount / total) * 100 : 0;
+    const surplusPctOfItems = total > 0 ? (surplusCount / total) * 100 : 0;
+    const shortPctOfItems = total > 0 ? (shortCount / total) * 100 : 0;
 
-  // Colour classes for KPIs
-  const netClass = netVar === 0 ? 'good' : (netVar > 0 ? 'pos' : 'neg');
-  const accClass = accuracyPct >= 95 ? 'good' : (accuracyPct >= 80 ? '' : 'neg');
+    // Colour classes for KPIs
+    const netClass = netVar === 0 ? 'good' : (netVar > 0 ? 'pos' : 'neg');
+    const accClass = accuracyPct >= 95 ? 'good' : (accuracyPct >= 80 ? '' : 'neg');
 
-  const reportDate = new Date().toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' });
+    const reportDate = new Date().toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' });
 
-  const itemRow = (i) => {
-    const cls = i.variance === 0 ? '' : (i.variance > 0 ? 'pos' : 'neg');
-    return `<div class="var-item-row">
-      <span class="nm">${i.name}</span>
-      <span class="delta ${cls}">${fmtDelta(i.variance)}</span>
-      <span class="pct ${cls}">${fmtPct(i.pct)}</span>
-    </div>`;
-  };
+    const itemRow = (i) => {
+      const cls = i.variance === 0 ? '' : (i.variance > 0 ? 'pos' : 'neg');
+      return `<div class="var-item-row">
+        <span class="nm">${esc(i.name)}</span>
+        <span class="delta ${cls}">${fmtDelta(i.variance)}</span>
+        <span class="pct ${cls}">${fmtPct(i.pct)}</span>
+      </div>`;
+    };
 
-  const catRow = (c) => {
-    const cls = c.variance === 0 ? '' : (c.variance > 0 ? 'pos' : 'neg');
-    return `<div class="var-cat-row">
-      <div><div class="nm">${c.name}</div><div class="ct">${c.items} item${c.items !== 1 ? 's' : ''}</div></div>
-      <span class="delta ${cls}">${fmtDelta(c.variance)}</span>
-      <span class="pct ${cls}">${fmtPct(c.pct)}</span>
-    </div>`;
-  };
+    const catRow = (c) => {
+      const cls = c.variance === 0 ? '' : (c.variance > 0 ? 'pos' : 'neg');
+      return `<div class="var-cat-row">
+        <div><div class="nm">${esc(c.name)}</div><div class="ct">${c.items} item${c.items !== 1 ? 's' : ''}</div></div>
+        <span class="delta ${cls}">${fmtDelta(c.variance)}</span>
+        <span class="pct ${cls}">${fmtPct(c.pct)}</span>
+      </div>`;
+    };
 
-  const asmApplyBtn = isASM()
-    ? `<button class="btn btn-warning" style="flex:1;" onclick="closeModal(); applyCountVariance();">Apply Variance</button>`
-    : '';
+    const asm = isASM();
+    const actionBtn = asm
+      ? `<button class="btn btn-warning" style="flex:1;" onclick="closeModal(); applyCountVariance();">Apply Variance</button>`
+      : '';
+    // Tell Welfare users that ASM has to finalise the adjustment.
+    const welfareNote = asm ? '' : `
+      <div style="margin-top:12px; padding:10px 12px; background:var(--warning-bg, #fffbeb); border:1px solid var(--warning-border, #fde68a); border-radius:10px; font-size:0.78rem; color:var(--text-light); line-height:1.5;">
+        <b style="color:var(--text);">Report submitted for review.</b> An ASM needs to sign in to apply the variance to stock.
+      </div>`;
 
-  const html = `
-    <div class="modal-header">
-      <h3>Stock Count Variance Report</h3>
-      <button class="modal-close" onclick="closeModal()">&times;</button>
-    </div>
-    <div class="var-report-date">${reportDate} &middot; ${total} item${total !== 1 ? 's' : ''} counted</div>
-
-    <div class="var-kpi-grid">
-      <div class="var-kpi ${accClass}">
-        <div class="var-kpi-val">${accuracyPct.toFixed(1)}%</div>
-        <div class="var-kpi-lbl">Accuracy</div>
+    const html = `
+      <div class="modal-header">
+        <h3>Stock Count Variance Report</h3>
+        <button class="modal-close" onclick="closeModal()">&times;</button>
       </div>
-      <div class="var-kpi ${netClass}">
-        <div class="var-kpi-val">${fmtPct(netPct)}</div>
-        <div class="var-kpi-lbl">Net Variance</div>
+      <div class="var-report-date">${reportDate} &middot; ${total} item${total !== 1 ? 's' : ''} counted</div>
+
+      <div class="var-kpi-grid">
+        <div class="var-kpi ${accClass}">
+          <div class="var-kpi-val">${accuracyPct.toFixed(1)}%</div>
+          <div class="var-kpi-lbl">Accuracy</div>
+        </div>
+        <div class="var-kpi ${netClass}">
+          <div class="var-kpi-val">${fmtPct(netPct)}</div>
+          <div class="var-kpi-lbl">Net Variance</div>
+        </div>
+        <div class="var-kpi">
+          <div class="var-kpi-val">${absVarPct.toFixed(1)}%</div>
+          <div class="var-kpi-lbl">Total Movement</div>
+        </div>
       </div>
-      <div class="var-kpi">
-        <div class="var-kpi-val">${absVarPct.toFixed(1)}%</div>
-        <div class="var-kpi-lbl">Total Movement</div>
+
+      <div class="var-status-row ok">
+        <span>Matches system (OK)</span>
+        <span><b>${okCount}</b> &nbsp;<span class="pct">${okPct.toFixed(1)}%</span></span>
       </div>
-    </div>
-
-    <div class="var-status-row ok">
-      <span>Matches system (OK)</span>
-      <span><b>${okCount}</b> &nbsp;<span class="pct">${okPct.toFixed(1)}%</span></span>
-    </div>
-    <div class="var-status-row surplus">
-      <span>Surplus (counted &gt; system)</span>
-      <span><b>${surplusCount}</b> &nbsp;<span class="pct">${surplusPctOfItems.toFixed(1)}%</span></span>
-    </div>
-    <div class="var-status-row short">
-      <span>Short (counted &lt; system)</span>
-      <span><b>${shortCount}</b> &nbsp;<span class="pct">${shortPctOfItems.toFixed(1)}%</span></span>
-    </div>
-
-    <div style="display:flex; justify-content:space-between; padding:10px 2px; font-size:0.82rem; color:var(--text-light);">
-      <span>System total: <b style="color:var(--text)">${sumSystem}</b></span>
-      <span>Counted total: <b style="color:var(--text)">${sumActual}</b></span>
-      <span>Net: <b style="color:${netVar === 0 ? 'var(--text)' : netVar > 0 ? 'var(--info)' : 'var(--danger)'}">${fmtDelta(netVar)}</b></span>
-    </div>
-
-    ${shorts.length ? `<div class="var-section-title">Top Shortages</div>${shorts.map(itemRow).join('')}` : ''}
-    ${surpluses.length ? `<div class="var-section-title">Top Surpluses</div>${surpluses.map(itemRow).join('')}` : ''}
-
-    <div class="var-section-title">By Category</div>
-    ${cats.map(catRow).join('')}
-
-    <details style="margin-top:14px;">
-      <summary style="cursor:pointer; font-size:0.82rem; font-weight:600; color:var(--primary); padding:6px 0;">
-        Show all ${total} counted item${total !== 1 ? 's' : ''}
-      </summary>
-      <div style="margin-top:8px;">
-        ${items.slice().sort((a, b) => Math.abs(b.pct) - Math.abs(a.pct)).map(itemRow).join('')}
+      <div class="var-status-row surplus">
+        <span>Surplus (counted &gt; system)</span>
+        <span><b>${surplusCount}</b> &nbsp;<span class="pct">${surplusPctOfItems.toFixed(1)}%</span></span>
       </div>
-    </details>
+      <div class="var-status-row short">
+        <span>Short (counted &lt; system)</span>
+        <span><b>${shortCount}</b> &nbsp;<span class="pct">${shortPctOfItems.toFixed(1)}%</span></span>
+      </div>
 
-    <div style="display:flex; gap:8px; margin-top:18px;">
-      <button class="btn btn-outline" style="flex:1;" onclick="closeModal()">Close</button>
-      <button class="btn btn-success" style="flex:1;" onclick="downloadCountExcel()">Export Excel</button>
-      ${asmApplyBtn}
-    </div>
-  `;
-  openModal(html);
+      <div style="display:flex; justify-content:space-between; padding:10px 2px; font-size:0.82rem; color:var(--text-light);">
+        <span>System total: <b style="color:var(--text)">${sumSystem}</b></span>
+        <span>Counted total: <b style="color:var(--text)">${sumActual}</b></span>
+        <span>Net: <b style="color:${netVar === 0 ? 'var(--text)' : netVar > 0 ? 'var(--info)' : 'var(--danger)'}">${fmtDelta(netVar)}</b></span>
+      </div>
+
+      ${shorts.length ? `<div class="var-section-title">Top Shortages</div>${shorts.map(itemRow).join('')}` : ''}
+      ${surpluses.length ? `<div class="var-section-title">Top Surpluses</div>${surpluses.map(itemRow).join('')}` : ''}
+
+      <div class="var-section-title">By Category</div>
+      ${cats.map(catRow).join('')}
+
+      <details style="margin-top:14px;">
+        <summary style="cursor:pointer; font-size:0.82rem; font-weight:600; color:var(--primary); padding:6px 0;">
+          Show all ${total} counted item${total !== 1 ? 's' : ''}
+        </summary>
+        <div style="margin-top:8px;">
+          ${items.slice().sort((a, b) => Math.abs(b.pct) - Math.abs(a.pct)).map(itemRow).join('')}
+        </div>
+      </details>
+
+      ${welfareNote}
+
+      <div style="display:flex; gap:8px; margin-top:18px;">
+        <button class="btn btn-outline" style="flex:1;" onclick="closeModal()">Close</button>
+        <button class="btn btn-success" style="flex:1;" onclick="downloadCountExcel()">Export Excel</button>
+        ${actionBtn}
+      </div>
+    `;
+    openModal(html);
+  } catch (err) {
+    console.error('submitCountReport failed:', err);
+    toast('Could not build report: ' + (err && err.message ? err.message : 'unknown error'), 'error');
+  }
 }
 
 function downloadCountExcel() {
@@ -1981,30 +2013,50 @@ function downloadCountExcel() {
 
 function applyCountVariance() {
   if (!requireASM('Only ASM can apply stock variance')) return;
-  const items = getItems();
-  const affected = [];
-  items.forEach(i => {
-    const s = countState[i.id];
-    if (s && s.counted && s.actual !== i.quantity) {
-      affected.push({ id: i.id, name: i.name, from: i.quantity, to: s.actual });
-    }
-  });
-  if (!affected.length) { toast('No variance to apply', 'warning'); return; }
-  const preview = affected.slice(0, 6).map(a => `${a.name}: ${a.from} → ${a.to}`).join('\n') + (affected.length > 6 ? `\n...and ${affected.length - 6} more` : '');
-  showConfirm(`Apply variance to ${affected.length} item(s)?`, preview + '\n\nStock will be updated to match your counts.', () => {
-    const allItems = getItems();
-    affected.forEach(a => {
-      const idx = allItems.findIndex(x => x.id === a.id);
-      if (idx >= 0) {
-        allItems[idx].quantity = a.to;
-        pushItem(allItems[idx]);
+  try {
+    const items = getItems();
+    const affected = [];
+    items.forEach(i => {
+      const s = countState[i.id];
+      if (s && s.counted && s.actual !== i.quantity) {
+        affected.push({ id: i.id, name: i.name, from: i.quantity, to: s.actual });
       }
     });
-    saveItems(allItems);
-    countState = {};
-    renderCount();
-    toast(`Updated ${affected.length} item(s)`, 'success');
-  });
+    if (!affected.length) { toast('No variance to apply — counts already match stock', 'warning'); return; }
+    const preview = affected.slice(0, 6).map(a => `${a.name}: ${a.from} → ${a.to}`).join('\n') + (affected.length > 6 ? `\n...and ${affected.length - 6} more` : '');
+    showConfirm(`Apply variance to ${affected.length} item(s)?`, preview + '\n\nStock will be updated to match your counts.', async () => {
+      try {
+        const allItems = getItems();
+        const pushPromises = [];
+        affected.forEach(a => {
+          const idx = allItems.findIndex(x => x.id === a.id);
+          if (idx >= 0) {
+            allItems[idx].quantity = a.to;
+            // pushItem returns a promise — collect them so we can surface any cloud sync errors
+            pushPromises.push(Promise.resolve(pushItem(allItems[idx])).catch(e => {
+              console.warn('Cloud sync failed for', a.name, e);
+              return { _syncError: e, name: a.name };
+            }));
+          }
+        });
+        saveItems(allItems);
+        countState = {};
+        renderCount();
+        toast(`Updated ${affected.length} item(s)`, 'success');
+        const results = await Promise.all(pushPromises);
+        const failed = results.filter(r => r && r._syncError);
+        if (failed.length) {
+          toast(`${failed.length} item(s) updated locally but failed to sync to cloud — check your internet`, 'warning');
+        }
+      } catch (err) {
+        console.error('applyCountVariance inner failure:', err);
+        toast('Could not apply variance: ' + (err && err.message ? err.message : 'unknown error'), 'error');
+      }
+    });
+  } catch (err) {
+    console.error('applyCountVariance failed:', err);
+    toast('Could not apply variance: ' + (err && err.message ? err.message : 'unknown error'), 'error');
+  }
 }
 
 /* =================================================================
