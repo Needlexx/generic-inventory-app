@@ -176,6 +176,27 @@ body {
   font-weight: 700;
 }
 .tab-btn.active svg { transform: translateY(-1px); stroke-width: 2.4; }
+/* Red pending-count badge used for ASM's Stock Count tab when Welfare has
+   submitted a count awaiting approval. Visible from any tab. */
+.tab-btn .tab-badge {
+  position: absolute;
+  top: 4px;
+  right: calc(50% - 22px);
+  min-width: 18px; height: 18px; padding: 0 5px;
+  border-radius: 999px;
+  background: #dc2626; color: #fff;
+  font-size: 0.62rem; font-weight: 800;
+  display: none; align-items: center; justify-content: center;
+  box-shadow: 0 2px 5px rgba(220, 38, 38, 0.45);
+  border: 2px solid var(--bg, #fff);
+  line-height: 1;
+  animation: tab-badge-pulse 1.8s ease-in-out infinite;
+}
+.tab-btn .tab-badge.show { display: inline-flex; }
+@keyframes tab-badge-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.12); }
+}
 
 /* ========== MAIN ========== */
 main { padding: 14px; max-width: 640px; margin: 0 auto; }
@@ -988,6 +1009,10 @@ select.form-control {
       </button>
       <div class="user-menu" id="userMenu" style="display:none;" role="menu">
         <div class="user-menu-email" id="userMenuEmail"></div>
+        <button class="user-menu-item" id="userMenuCheckPending" style="display:none;" onclick="asmCheckForPending()" role="menuitem">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+          <span>Check for pending counts</span>
+        </button>
         <button class="user-menu-item" onclick="openChangePasswordModal(false)" role="menuitem">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
           <span>Change password</span>
@@ -1131,6 +1156,7 @@ select.form-control {
   <button class="tab-btn" onclick="switchTab('Count')">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
     Stock Count
+    <span class="tab-badge" id="countTabBadge" aria-hidden="true"></span>
   </button>
   <button class="tab-btn" onclick="switchTab('History')">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
@@ -1213,6 +1239,8 @@ function applyRoleUI() {
   if (addBtn) addBtn.style.display = asm ? '' : 'none';
   const applyBtn = document.getElementById('applyCountBtn');
   if (applyBtn) applyBtn.style.display = asm ? '' : 'none';
+  const checkPendingBtn = document.getElementById('userMenuCheckPending');
+  if (checkPendingBtn) checkPendingBtn.style.display = asm ? '' : 'none';
 }
 
 /* =================================================================
@@ -3013,6 +3041,7 @@ async function doLogout() {
   closeUserMenu();
   showConfirm('Sign out', 'You will need to sign in again to use the app.', async () => {
     try { unsubscribeRealtime(); } catch(e) {}
+    try { stopPendingSubmissionsPoller(); } catch(e) {}
     await sb.auth.signOut();
     // Clear local cache so next user doesn't see old data
     localStorage.removeItem(KEYS.items);
@@ -3230,6 +3259,8 @@ async function afterAuthReady() {
   try { subscribeToRealtime(); } catch(e) { console.warn('Realtime subscribe failed:', e); }
   // Show pending stock count submissions to ASM (silent for Welfare)
   try { refreshPendingSubmissionsBanner(); } catch(e) { console.warn('Pending banner refresh failed:', e); }
+  // Polling fallback in case realtime isn't receiving stock_counts events
+  try { startPendingSubmissionsPoller(); } catch(e) { console.warn('Pending poller start failed:', e); }
   // Orphan photo sweep (once per 24h)
   const lastSweep = parseInt(localStorage.getItem(KEYS.orphanSweep) || '0');
   if (Date.now() - lastSweep > 86400000) {
@@ -3619,21 +3650,34 @@ async function reviewSubmission(id) {
   openModal(html);
 }
 
-// Updates the pending banner on the Count tab (ASM only)
+// Updates the pending banner on the Count tab AND the red-dot badge on the
+// Stock Count nav button (visible from any tab). ASM only.
 async function refreshPendingSubmissionsBanner() {
   const el = document.getElementById('pendingSubmissionsBanner');
-  if (!el) return;
+  const badge = document.getElementById('countTabBadge');
+  const setBadge = (n) => {
+    if (!badge) return;
+    if (n > 0) {
+      badge.textContent = n > 9 ? '9+' : String(n);
+      badge.classList.add('show');
+    } else {
+      badge.classList.remove('show');
+      badge.textContent = '';
+    }
+  };
   if (!isASM()) {
-    el.style.display = 'none';
-    el.innerHTML = '';
+    if (el) { el.style.display = 'none'; el.innerHTML = ''; }
+    setBadge(0);
     return;
   }
   const list = await pullStockCountSubmissions();
   if (!list.length) {
-    el.style.display = 'none';
-    el.innerHTML = '';
+    if (el) { el.style.display = 'none'; el.innerHTML = ''; }
+    setBadge(0);
     return;
   }
+  setBadge(list.length);
+  if (!el) return; // Count tab DOM not ready yet — badge is enough
   el.style.display = '';
   const n = list.length;
   const latest = list[0];
@@ -3652,6 +3696,46 @@ async function refreshPendingSubmissionsBanner() {
       <div class="pending-banner-arrow">&rsaquo;</div>
     </div>
   `;
+}
+
+// Polling fallback: if realtime isn't working (e.g. stock_counts not in the
+// supabase_realtime publication), this still pulls pending counts every 45s.
+let pendingSubmissionsPoller = null;
+function startPendingSubmissionsPoller() {
+  stopPendingSubmissionsPoller();
+  pendingSubmissionsPoller = setInterval(() => {
+    if (document.hidden) return; // save battery when tab is backgrounded
+    refreshPendingSubmissionsBanner().catch(e => console.warn('Poll failed:', e));
+  }, 45000);
+}
+function stopPendingSubmissionsPoller() {
+  if (pendingSubmissionsPoller) { clearInterval(pendingSubmissionsPoller); pendingSubmissionsPoller = null; }
+}
+// Refresh whenever the user returns to the tab (phone unlock, app switcher, etc.)
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && currentUser) {
+    refreshPendingSubmissionsBanner().catch(e => console.warn('Focus refresh failed:', e));
+  }
+});
+
+// ASM-only: force a manual pull of pending submissions from the user menu.
+// Useful when realtime hasn't delivered an event (publication not enabled, etc.)
+async function asmCheckForPending() {
+  closeUserMenu();
+  if (!requireASM('Only ASM can review pending counts')) return;
+  try {
+    await refreshPendingSubmissionsBanner();
+    const list = await pullStockCountSubmissions();
+    if (!list.length) {
+      toast('No pending stock counts — all clear', 'success');
+      return;
+    }
+    toast(`${list.length} pending — opening queue`, 'success');
+    openPendingSubmissions();
+  } catch (err) {
+    console.error('asmCheckForPending failed:', err);
+    toast('Could not check: ' + (err && err.message ? err.message : 'unknown error'), 'error');
+  }
 }
 
 /* =================================================================
