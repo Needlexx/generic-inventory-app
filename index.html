@@ -818,6 +818,49 @@ select.form-control {
 }
 .count-summary .val { font-weight: 800; color: var(--text); font-size: 0.92rem; margin-left: 4px; }
 
+/* ========== PENDING SUBMISSIONS BANNER ========== */
+.pending-banner {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 14px;
+  background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+  border: 1px solid #f59e0b;
+  border-radius: 12px;
+  cursor: pointer;
+  box-shadow: 0 4px 12px -4px rgba(245, 158, 11, 0.35);
+  transition: transform 0.12s, box-shadow 0.12s;
+}
+.pending-banner:hover { transform: translateY(-1px); box-shadow: 0 8px 18px -6px rgba(245, 158, 11, 0.45); }
+.pending-banner-icon {
+  flex: 0 0 36px; width: 36px; height: 36px;
+  border-radius: 10px; background: #f59e0b; color: #fff;
+  display: flex; align-items: center; justify-content: center;
+}
+.pending-banner-icon svg { width: 20px; height: 20px; }
+.pending-banner-text { flex: 1; min-width: 0; }
+.pending-banner-title { font-size: 0.9rem; font-weight: 700; color: #78350f; letter-spacing: -0.01em; }
+.pending-banner-sub { font-size: 0.72rem; color: #92400e; margin-top: 2px; }
+.pending-banner-arrow { color: #92400e; font-weight: 700; }
+
+.submission-card {
+  padding: 12px 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  background: #fff;
+  margin-bottom: 10px;
+}
+.submission-card .head {
+  display: flex; justify-content: space-between; align-items: flex-start;
+  gap: 10px; margin-bottom: 8px;
+}
+.submission-card .who { font-size: 0.85rem; font-weight: 700; color: var(--text); }
+.submission-card .when { font-size: 0.72rem; color: var(--text-light); margin-top: 2px; }
+.submission-card .stats {
+  display: flex; gap: 10px; font-size: 0.78rem; color: var(--text-light); margin-bottom: 10px;
+}
+.submission-card .stats b { color: var(--text); font-weight: 700; }
+.submission-card .actions { display: flex; gap: 6px; }
+.submission-card .actions .btn { flex: 1; padding: 9px; font-size: 0.82rem; }
+
 /* ========== VARIANCE REPORT MODAL ========== */
 .var-report-date { font-size: 0.78rem; color: var(--text-light); margin-bottom: 14px; }
 .var-kpi-grid {
@@ -973,6 +1016,9 @@ select.form-control {
     <div id="issueFlow"></div>
   </div>
 
+  <!-- Pending stock count submissions banner is injected here when ASM has
+       pending submissions waiting for review. See refreshPendingSubmissionsBanner. -->
+
   <!-- === STOCK TAB === -->
   <div class="tab-page" id="pageStock">
     <div id="stockSummary"></div>
@@ -987,6 +1033,7 @@ select.form-control {
   <!-- === STOCK COUNT TAB === -->
   <div class="tab-page" id="pageCount">
     <div class="card">
+      <div id="pendingSubmissionsBanner" style="display:none; margin-bottom:12px;"></div>
       <h3 style="font-size:1rem; font-weight:700; margin-bottom:4px; letter-spacing:-0.02em;">Stock Count</h3>
       <p style="font-size:0.8rem; color:var(--text-light); margin-bottom:12px; line-height:1.5;">Physically count stock and enter the actual quantity. Variance = counted &minus; system.</p>
       <input class="form-control" id="countSearch" placeholder="Search items..." oninput="renderCount()" style="margin-bottom:8px;">
@@ -1419,7 +1466,7 @@ function switchTab(name) {
 
   if (name === 'Issue') initIssueFlow();
   if (name === 'Stock') renderInventory();
-  if (name === 'Count') renderCount();
+  if (name === 'Count') { renderCount(); refreshPendingSubmissionsBanner(); }
   if (name === 'History') renderHistory();
   if (name === 'Dashboard') renderDashboard();
   if (name === 'Reports') { initReports(); renderArchive(); }
@@ -1876,13 +1923,14 @@ function submitCountReport() {
     };
 
     const asm = isASM();
+    // ASM: Apply directly.  Welfare: Send to ASM for approval (saves to cloud).
     const actionBtn = asm
       ? `<button class="btn btn-warning" style="flex:1;" onclick="closeModal(); applyCountVariance();">Apply Variance</button>`
-      : '';
-    // Tell Welfare users that ASM has to finalise the adjustment.
+      : `<button class="btn btn-primary" style="flex:1;" id="sendToASMBtn" onclick="sendReportToASM()">Send to ASM for approval</button>`;
+    // Explanatory note for Welfare
     const welfareNote = asm ? '' : `
       <div style="margin-top:12px; padding:10px 12px; background:var(--warning-bg, #fffbeb); border:1px solid var(--warning-border, #fde68a); border-radius:10px; font-size:0.78rem; color:var(--text-light); line-height:1.5;">
-        <b style="color:var(--text);">Report submitted for review.</b> An ASM needs to sign in to apply the variance to stock.
+        <b style="color:var(--text);">Sending this report saves it to the cloud</b> where an ASM can review and apply it from their device. After sending, your counts will be cleared from this device.
       </div>`;
 
     const html = `
@@ -3180,6 +3228,8 @@ async function afterAuthReady() {
   renderCategoryPills();
   // Subscribe to live updates so changes appear instantly on all devices
   try { subscribeToRealtime(); } catch(e) { console.warn('Realtime subscribe failed:', e); }
+  // Show pending stock count submissions to ASM (silent for Welfare)
+  try { refreshPendingSubmissionsBanner(); } catch(e) { console.warn('Pending banner refresh failed:', e); }
   // Orphan photo sweep (once per 24h)
   const lastSweep = parseInt(localStorage.getItem(KEYS.orphanSweep) || '0');
   if (Date.now() - lastSweep > 86400000) {
@@ -3250,6 +3300,323 @@ async function pushTransaction(txn) {
 }
 
 /* =================================================================
+   STOCK COUNT SUBMISSIONS — cloud-backed approval flow
+   Welfare submits counts → ASM reviews and applies
+   ================================================================= */
+
+// Fetch pending submissions (status='pending'), newest first
+async function pullStockCountSubmissions() {
+  const { data, error } = await sb
+    .from('stock_counts')
+    .select('*')
+    .eq('status', 'pending')
+    .order('submitted_at', { ascending: false });
+  if (error) { console.warn('Pull pending stock counts failed:', error); return []; }
+  return data || [];
+}
+
+// Fetch a single submission by id
+async function getStockCountSubmission(id) {
+  const { data, error } = await sb.from('stock_counts').select('*').eq('id', id).single();
+  if (error) { console.warn('Get submission failed:', error); return null; }
+  return data;
+}
+
+// Button handler: disables the Send button, calls submitCountToASM, closes modal on success
+async function sendReportToASM() {
+  const btn = document.getElementById('sendToASMBtn');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Sending...'; }
+  const ok = await submitCountToASM();
+  if (ok) {
+    closeModal();
+  } else if (btn) {
+    btn.disabled = false;
+    btn.textContent = 'Send to ASM for approval';
+  }
+}
+
+// Welfare (or ASM) sends current countState + summary to cloud as pending
+async function submitCountToASM() {
+  const data = computeVariance();
+  if (!data.items.length) {
+    toast('No counts entered — type a number next to at least one item first', 'warning');
+    return false;
+  }
+  const payload = {
+    submitted_by: (currentUser && currentUser.email) || 'unknown',
+    counts: data.items.map(i => ({
+      id: i.id, name: i.name, category: i.category, unit: i.unit,
+      system: i.system, actual: i.actual, variance: i.variance, pct: i.pct
+    })),
+    summary: {
+      accuracyPct: data.accuracyPct,
+      netPct: data.netPct,
+      absVarPct: data.absVarPct,
+      okCount: data.okCount,
+      surplusCount: data.surplusCount,
+      shortCount: data.shortCount,
+      sumSystem: data.sumSystem,
+      sumActual: data.sumActual
+    },
+    status: 'pending'
+  };
+  showSyncStatus('syncing');
+  const { error } = await sb.from('stock_counts').insert(payload);
+  if (error) {
+    console.error('submitCountToASM failed:', error);
+    showSyncStatus('error');
+    toast('Could not send to ASM: ' + (error.message || 'unknown error'), 'error');
+    return false;
+  }
+  showSyncStatus('synced');
+  toast('Report sent to ASM for approval', 'success');
+  // Clear local counts since they are now safely stored server-side
+  countState = {};
+  renderCount();
+  return true;
+}
+
+// ASM reviews a submission and applies it — updates items + marks applied
+async function applyStockCountSubmission(id) {
+  if (!requireASM('Only ASM can apply stock variance')) return;
+  try {
+    const sub = await getStockCountSubmission(id);
+    if (!sub) { toast('Submission not found', 'error'); return; }
+    if (sub.status !== 'pending') { toast('This submission has already been processed', 'warning'); return; }
+    const counts = sub.counts || [];
+    const allItems = getItems();
+    const affected = [];
+    counts.forEach(c => {
+      const idx = allItems.findIndex(x => x.id === c.id);
+      if (idx >= 0 && allItems[idx].quantity !== c.actual) {
+        affected.push({ id: c.id, name: allItems[idx].name, from: allItems[idx].quantity, to: c.actual });
+        allItems[idx].quantity = c.actual;
+      }
+    });
+    if (!affected.length) {
+      // Nothing to change but still mark as applied so it leaves the queue
+      await sb.from('stock_counts').update({
+        status: 'applied',
+        applied_by: (currentUser && currentUser.email) || 'unknown',
+        applied_at: new Date().toISOString(),
+        note: 'No changes — counts already matched stock'
+      }).eq('id', id);
+      toast('Counts already match stock — marked applied', 'success');
+      closeModal();
+      refreshPendingSubmissionsBanner();
+      return;
+    }
+
+    // Push each changed item to cloud (items table updates trigger realtime on all devices)
+    const pushPromises = affected.map(a => {
+      const full = allItems.find(x => x.id === a.id);
+      return Promise.resolve(pushItem(full)).catch(e => ({ _syncError: e, name: a.name }));
+    });
+    saveItems(allItems);
+    const results = await Promise.all(pushPromises);
+    const failed = results.filter(r => r && r._syncError);
+
+    // Mark submission applied
+    const { error: markErr } = await sb.from('stock_counts').update({
+      status: 'applied',
+      applied_by: (currentUser && currentUser.email) || 'unknown',
+      applied_at: new Date().toISOString()
+    }).eq('id', id);
+    if (markErr) console.warn('Could not mark submission applied:', markErr);
+
+    closeModal();
+    renderInventory();
+    refreshPendingSubmissionsBanner();
+    toast(`Applied ${affected.length} item${affected.length !== 1 ? 's' : ''}`, 'success');
+    if (failed.length) {
+      toast(`${failed.length} item(s) failed cloud sync — they will retry`, 'warning');
+    }
+  } catch (err) {
+    console.error('applyStockCountSubmission failed:', err);
+    toast('Could not apply: ' + (err && err.message ? err.message : 'unknown error'), 'error');
+  }
+}
+
+async function dismissStockCountSubmission(id) {
+  if (!requireASM('Only ASM can dismiss a submission')) return;
+  showConfirm('Dismiss submission?', 'The count will be marked dismissed and removed from the queue without changing stock.', async () => {
+    const { error } = await sb.from('stock_counts').update({
+      status: 'dismissed',
+      applied_by: (currentUser && currentUser.email) || 'unknown',
+      applied_at: new Date().toISOString()
+    }).eq('id', id);
+    if (error) { toast('Dismiss failed: ' + error.message, 'error'); return; }
+    toast('Submission dismissed', 'success');
+    closeModal();
+    refreshPendingSubmissionsBanner();
+  });
+}
+
+// Opens the list of pending submissions (ASM only)
+async function openPendingSubmissions() {
+  if (!requireASM('Only ASM can review pending counts')) return;
+  const list = await pullStockCountSubmissions();
+  if (!list.length) {
+    toast('No pending submissions', 'success');
+    refreshPendingSubmissionsBanner();
+    return;
+  }
+  const cards = list.map(s => {
+    const when = new Date(s.submitted_at).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' });
+    const counts = s.counts || [];
+    const summary = s.summary || {};
+    const itemCount = counts.length;
+    const acc = typeof summary.accuracyPct === 'number' ? summary.accuracyPct.toFixed(1) : '—';
+    const net = typeof summary.netPct === 'number' ? fmtPct(summary.netPct) : '—';
+    return `
+      <div class="submission-card">
+        <div class="head">
+          <div>
+            <div class="who">${esc(s.submitted_by || 'unknown')}</div>
+            <div class="when">${when}</div>
+          </div>
+        </div>
+        <div class="stats">
+          <span><b>${itemCount}</b> item${itemCount !== 1 ? 's' : ''}</span>
+          <span>Accuracy <b>${acc}%</b></span>
+          <span>Net <b>${net}</b></span>
+        </div>
+        <div class="actions">
+          <button class="btn btn-primary" onclick="reviewSubmission('${s.id}')">Review &amp; Apply</button>
+          <button class="btn btn-outline" onclick="dismissStockCountSubmission('${s.id}')">Dismiss</button>
+        </div>
+      </div>`;
+  }).join('');
+  openModal(`
+    <div class="modal-header">
+      <h3>Pending Stock Counts</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button>
+    </div>
+    <p style="font-size:0.82rem; color:var(--text-light); margin-bottom:12px;">
+      ${list.length} submission${list.length !== 1 ? 's' : ''} waiting for approval. Review each one and apply or dismiss.
+    </p>
+    ${cards}
+  `);
+}
+
+// Opens a full variance report for a specific submission with Apply / Dismiss buttons
+async function reviewSubmission(id) {
+  const sub = await getStockCountSubmission(id);
+  if (!sub) { toast('Could not load submission', 'error'); return; }
+  const counts = sub.counts || [];
+  const summary = sub.summary || {};
+  const submitter = esc(sub.submitted_by || 'unknown');
+  const when = new Date(sub.submitted_at).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' });
+
+  const itemRow = (i) => {
+    const v = Number(i.variance) || 0;
+    const cls = v === 0 ? '' : (v > 0 ? 'pos' : 'neg');
+    const pct = typeof i.pct === 'number' ? i.pct : 0;
+    return `<div class="var-item-row">
+      <span class="nm">${esc(i.name)}</span>
+      <span class="delta ${cls}">${fmtDelta(v)}</span>
+      <span class="pct ${cls}">${fmtPct(pct)}</span>
+    </div>`;
+  };
+
+  // Re-compute simple shorts/surpluses from counts
+  const shorts = counts.filter(i => Number(i.variance) < 0).sort((a, b) => (a.pct || 0) - (b.pct || 0)).slice(0, 5);
+  const surpluses = counts.filter(i => Number(i.variance) > 0).sort((a, b) => (b.pct || 0) - (a.pct || 0)).slice(0, 5);
+
+  const html = `
+    <div class="modal-header">
+      <h3>Review Submission</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="var-report-date">
+      From <b style="color:var(--text);">${submitter}</b> &middot; ${when} &middot; ${counts.length} item${counts.length !== 1 ? 's' : ''}
+    </div>
+
+    <div class="var-kpi-grid">
+      <div class="var-kpi ${(summary.accuracyPct || 0) >= 95 ? 'good' : ''}">
+        <div class="var-kpi-val">${(summary.accuracyPct || 0).toFixed(1)}%</div>
+        <div class="var-kpi-lbl">Accuracy</div>
+      </div>
+      <div class="var-kpi ${(summary.netPct || 0) > 0 ? 'pos' : (summary.netPct || 0) < 0 ? 'neg' : 'good'}">
+        <div class="var-kpi-val">${fmtPct(summary.netPct || 0)}</div>
+        <div class="var-kpi-lbl">Net Variance</div>
+      </div>
+      <div class="var-kpi">
+        <div class="var-kpi-val">${(summary.absVarPct || 0).toFixed(1)}%</div>
+        <div class="var-kpi-lbl">Total Movement</div>
+      </div>
+    </div>
+
+    <div class="var-status-row ok">
+      <span>Matches system (OK)</span>
+      <span><b>${summary.okCount || 0}</b></span>
+    </div>
+    <div class="var-status-row surplus">
+      <span>Surplus (counted &gt; system)</span>
+      <span><b>${summary.surplusCount || 0}</b></span>
+    </div>
+    <div class="var-status-row short">
+      <span>Short (counted &lt; system)</span>
+      <span><b>${summary.shortCount || 0}</b></span>
+    </div>
+
+    ${shorts.length ? `<div class="var-section-title">Top Shortages</div>${shorts.map(itemRow).join('')}` : ''}
+    ${surpluses.length ? `<div class="var-section-title">Top Surpluses</div>${surpluses.map(itemRow).join('')}` : ''}
+
+    <details style="margin-top:14px;">
+      <summary style="cursor:pointer; font-size:0.82rem; font-weight:600; color:var(--primary); padding:6px 0;">
+        Show all ${counts.length} counted item${counts.length !== 1 ? 's' : ''}
+      </summary>
+      <div style="margin-top:8px;">
+        ${counts.slice().sort((a, b) => Math.abs((b.pct || 0)) - Math.abs((a.pct || 0))).map(itemRow).join('')}
+      </div>
+    </details>
+
+    <div style="display:flex; gap:8px; margin-top:18px;">
+      <button class="btn btn-outline" style="flex:1;" onclick="openPendingSubmissions()">Back</button>
+      <button class="btn btn-danger" onclick="dismissStockCountSubmission('${sub.id}')">Dismiss</button>
+      <button class="btn btn-warning" style="flex:1;" onclick="applyStockCountSubmission('${sub.id}')">Apply to Stock</button>
+    </div>
+  `;
+  openModal(html);
+}
+
+// Updates the pending banner on the Count tab (ASM only)
+async function refreshPendingSubmissionsBanner() {
+  const el = document.getElementById('pendingSubmissionsBanner');
+  if (!el) return;
+  if (!isASM()) {
+    el.style.display = 'none';
+    el.innerHTML = '';
+    return;
+  }
+  const list = await pullStockCountSubmissions();
+  if (!list.length) {
+    el.style.display = 'none';
+    el.innerHTML = '';
+    return;
+  }
+  el.style.display = '';
+  const n = list.length;
+  const latest = list[0];
+  const fromWho = esc(latest.submitted_by || 'staff');
+  el.innerHTML = `
+    <div class="pending-banner" onclick="openPendingSubmissions()">
+      <div class="pending-banner-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+        </svg>
+      </div>
+      <div class="pending-banner-text">
+        <div class="pending-banner-title">${n} count submission${n !== 1 ? 's' : ''} awaiting approval</div>
+        <div class="pending-banner-sub">Latest from ${fromWho} — tap to review</div>
+      </div>
+      <div class="pending-banner-arrow">&rsaquo;</div>
+    </div>
+  `;
+}
+
+/* =================================================================
    REALTIME — live updates across devices via Supabase Realtime
    ================================================================= */
 let realtimeChannels = [];
@@ -3272,7 +3639,16 @@ function subscribeToRealtime() {
       if (status === 'CHANNEL_ERROR') console.warn('[Realtime] transactions channel error');
     });
 
-  realtimeChannels = [itemsCh, txnCh];
+  // Stock count submissions — ASM sees new Welfare submissions instantly,
+  // and Welfare devices see a submission leave the queue when ASM applies/dismisses it.
+  const stockCountCh = sb.channel('realtime-stock-counts')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'stock_counts' }, handleStockCountChange)
+    .subscribe((status) => {
+      if (status === 'SUBSCRIBED') console.log('[Realtime] stock_counts channel ready');
+      if (status === 'CHANNEL_ERROR') console.warn('[Realtime] stock_counts channel error');
+    });
+
+  realtimeChannels = [itemsCh, txnCh, stockCountCh];
 }
 
 function unsubscribeRealtime() {
@@ -3320,6 +3696,16 @@ function handleTxnChange(payload) {
   }
   localStorage.setItem(KEYS.transactions, JSON.stringify(txns));
   refreshActiveTab();
+}
+
+function handleStockCountChange(payload) {
+  // Any change to pending queue — refresh ASM's banner, and toast new arrivals
+  if (!isASM()) return;
+  if (payload.eventType === 'INSERT' && payload.new && payload.new.status === 'pending') {
+    const who = (payload.new.submitted_by || 'staff');
+    toast(`New stock count submitted by ${who}`, 'success');
+  }
+  try { refreshPendingSubmissionsBanner(); } catch (e) { console.warn('Banner refresh failed:', e); }
 }
 
 function refreshActiveTab() {

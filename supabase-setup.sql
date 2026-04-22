@@ -44,6 +44,21 @@ create table if not exists public.settings (
 );
 insert into public.settings (id, data) values (1, '{}') on conflict (id) do nothing;
 
+-- Stock count submissions — Welfare staff submit counts here for ASM review.
+-- ASM can apply them (which updates the items table) or dismiss them.
+create table if not exists public.stock_counts (
+  id uuid primary key default gen_random_uuid(),
+  submitted_by text not null,
+  submitted_at timestamptz not null default now(),
+  counts jsonb not null,               -- [{ id, name, category, unit, system, actual, variance, pct }]
+  summary jsonb,                       -- { accuracyPct, netPct, absVarPct, okCount, surplusCount, shortCount, sumSystem, sumActual }
+  status text not null default 'pending' check (status in ('pending','applied','dismissed')),
+  applied_by text,
+  applied_at timestamptz,
+  note text
+);
+create index if not exists stock_counts_status_idx on public.stock_counts(status, submitted_at desc);
+
 -- Auto-update timestamp on items
 create or replace function public.touch_updated_at()
 returns trigger language plpgsql as $$
@@ -61,6 +76,7 @@ create trigger items_touch_updated_at
 alter table public.items enable row level security;
 alter table public.transactions enable row level security;
 alter table public.settings enable row level security;
+alter table public.stock_counts enable row level security;
 
 drop policy if exists "auth_all_items" on public.items;
 create policy "auth_all_items" on public.items
@@ -72,6 +88,10 @@ create policy "auth_all_transactions" on public.transactions
 
 drop policy if exists "auth_all_settings" on public.settings;
 create policy "auth_all_settings" on public.settings
+  for all to authenticated using (true) with check (true);
+
+drop policy if exists "auth_all_stock_counts" on public.stock_counts;
+create policy "auth_all_stock_counts" on public.stock_counts
   for all to authenticated using (true) with check (true);
 
 -- ============ STORAGE BUCKET POLICIES =================================
@@ -110,10 +130,17 @@ begin
 exception when duplicate_object then null;
 end $$;
 
+do $$
+begin
+  execute 'alter publication supabase_realtime add table public.stock_counts';
+exception when duplicate_object then null;
+end $$;
+
 -- Make sure full row payloads are sent on UPDATE/DELETE so clients can
 -- reconcile local cache without a second round-trip.
 alter table public.items replica identity full;
 alter table public.transactions replica identity full;
+alter table public.stock_counts replica identity full;
 
 -- ============ DAILY 28-DAY PURGE (pg_cron) ============================
 -- Runs every day at 03:00 UTC. Deletes transactions older than 28 days.
