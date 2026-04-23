@@ -1195,7 +1195,7 @@ select.form-control {
    ================================================================= */
 // App version — bump alongside sw.js CACHE_NAME so ASM can verify which build
 // their device is actually running (shown under the email in the user menu).
-window.APP_VERSION = 'v40';
+window.APP_VERSION = 'v41';
 const SUPABASE_URL  = 'https://nogrnsjnwypihjaeulef.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5vZ3Juc2pud3lwaWhqYWV1bGVmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY0MDg2MzQsImV4cCI6MjA5MTk4NDYzNH0.ZxwsWtzzKO_nUSMQpH-FpbA2-5nYH8Nu1IegcKcYjW8';
 const PHOTO_BUCKET  = 'inventory-photos';
@@ -3550,12 +3550,18 @@ async function finishReviewAndContinue(successToast, successType) {
   if (typeof renderInventory === 'function') { try { renderInventory(); } catch(_) {} }
   await refreshPendingSubmissionsBanner();
   const remaining = await pullStockCountSubmissions();
-  toast(successToast, successType || 'success');
+  // Append remaining-count to the toast so ASM sees concrete progress — otherwise
+  // if Welfare spammed submissions, each apply re-opens the list showing another
+  // identical-looking card, and ASM can't tell anything happened.
+  const suffix = remaining.length
+    ? ` · ${remaining.length} more pending`
+    : ' · all clear';
+  toast(successToast + suffix, successType || 'success', 3500);
   if (remaining.length) {
     // Let user see the toast for a moment before re-opening the list
-    setTimeout(() => { try { openPendingSubmissions(); } catch(_) {} }, 350);
+    setTimeout(() => { try { openPendingSubmissions(); } catch(_) {} }, 500);
   } else {
-    setTimeout(() => { toast('All submissions processed', 'success'); }, 450);
+    setTimeout(() => { toast('All submissions processed', 'success'); }, 550);
   }
 }
 
@@ -3681,19 +3687,24 @@ async function openPendingSubmissions() {
     refreshPendingSubmissionsBanner();
     return;
   }
-  const cards = list.map(s => {
-    const when = new Date(s.submitted_at).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' });
+  // Show seconds + short id so cards submitted in the same minute don't look identical.
+  // When Welfare rapid-fires submissions, minute-precision timestamps + matching stats
+  // made every card appear the same — ASM would think "nothing happened" after apply.
+  const cards = list.map((s, i) => {
+    const d = new Date(s.submitted_at);
+    const when = d.toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'medium' });
+    const shortId = String(s.id || '').slice(0, 8);
     const counts = s.counts || [];
     const summary = s.summary || {};
     const itemCount = counts.length;
     const acc = typeof summary.accuracyPct === 'number' ? summary.accuracyPct.toFixed(1) : '—';
     const net = typeof summary.netPct === 'number' ? fmtPct(summary.netPct) : '—';
     return `
-      <div class="submission-card">
+      <div class="submission-card" data-sub-id="${s.id}">
         <div class="head">
           <div>
-            <div class="who">${esc(s.submitted_by || 'unknown')}</div>
-            <div class="when">${when}</div>
+            <div class="who">#${i + 1} · ${esc(s.submitted_by || 'unknown')}</div>
+            <div class="when">${when} · <code style="font-size:0.72rem; opacity:0.7;">${shortId}</code></div>
           </div>
         </div>
         <div class="stats">
@@ -3707,6 +3718,9 @@ async function openPendingSubmissions() {
         </div>
       </div>`;
   }).join('');
+  const bulkBtn = list.length > 1
+    ? `<button class="btn btn-outline" style="width:100%; margin-top:8px; border-color:#dc2626; color:#dc2626;" onclick="dismissAllPendingSubmissions()">Dismiss all ${list.length} pending</button>`
+    : '';
   openModal(`
     <div class="modal-header">
       <h3>Pending Stock Counts</h3>
@@ -3716,7 +3730,27 @@ async function openPendingSubmissions() {
       ${list.length} submission${list.length !== 1 ? 's' : ''} waiting for approval. Review each one and apply or dismiss.
     </p>
     ${cards}
+    ${bulkBtn}
   `);
+}
+
+// Bulk-dismiss all pending stock count submissions — useful when Welfare rapid-fires
+// test submissions and ASM needs to clear the queue without reviewing each one.
+async function dismissAllPendingSubmissions() {
+  if (!requireASM('Only ASM can dismiss submissions')) return;
+  const list = await pullStockCountSubmissions();
+  if (!list.length) { toast('No pending submissions', 'info'); return; }
+  if (!confirm(`Dismiss all ${list.length} pending stock count${list.length !== 1 ? 's' : ''}? This cannot be undone.`)) return;
+  toast(`Dismissing ${list.length}…`, 'info', 1500);
+  let ok = 0, fail = 0;
+  for (const s of list) {
+    const success = await markSubmissionStatus(s.id, 'dismissed', { note: 'Bulk dismissed' });
+    if (success) ok++; else fail++;
+  }
+  closeModal();
+  await refreshPendingSubmissionsBanner();
+  if (fail) toast(`Dismissed ${ok}, ${fail} failed`, 'warning', 4000);
+  else toast(`Dismissed all ${ok} pending`, 'success');
 }
 
 // Opens a full variance report for a specific submission with Apply / Dismiss buttons
