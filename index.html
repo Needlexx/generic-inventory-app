@@ -1072,6 +1072,9 @@ select.form-control {
   <div class="tab-page" id="pageCount">
     <div class="card">
       <div id="pendingSubmissionsBanner" style="display:none; margin-bottom:12px;"></div>
+      <!-- Persistent cloud-state row (ASM only) — shows exactly what's in the
+           stock_counts table so it's obvious whether submissions are landing -->
+      <div id="cloudStateRow" style="display:none; margin-bottom:12px;"></div>
       <h3 style="font-size:1rem; font-weight:700; margin-bottom:4px; letter-spacing:-0.02em;">Stock Count</h3>
       <p style="font-size:0.8rem; color:var(--text-light); margin-bottom:12px; line-height:1.5;">Physically count stock and enter the actual quantity. Variance = counted &minus; system.</p>
       <input class="form-control" id="countSearch" placeholder="Search items..." oninput="renderCount()" style="margin-bottom:8px;">
@@ -1192,7 +1195,7 @@ select.form-control {
    ================================================================= */
 // App version — bump alongside sw.js CACHE_NAME so ASM can verify which build
 // their device is actually running (shown under the email in the user menu).
-window.APP_VERSION = 'v38';
+window.APP_VERSION = 'v39';
 const SUPABASE_URL  = 'https://nogrnsjnwypihjaeulef.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5vZ3Juc2pud3lwaWhqYWV1bGVmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY0MDg2MzQsImV4cCI6MjA5MTk4NDYzNH0.ZxwsWtzzKO_nUSMQpH-FpbA2-5nYH8Nu1IegcKcYjW8';
 const PHOTO_BUCKET  = 'inventory-photos';
@@ -3404,6 +3407,19 @@ async function submitCountToASM() {
     toast('No counts entered — type a number next to at least one item first', 'warning');
     return false;
   }
+  // Auth guard — an expired session would silently hit RLS and the row would
+  // never land. Check upfront and tell the user to sign back in if needed.
+  try {
+    const { data: sess } = await sb.auth.getSession();
+    if (!sess || !sess.session || !sess.session.user) {
+      console.error('[stock_counts] No active session — blocking submit');
+      toast('Your session has expired — please sign in again', 'error');
+      return false;
+    }
+    console.log('[stock_counts] Submit auth OK — user:', sess.session.user.email);
+  } catch (e) {
+    console.warn('[stock_counts] auth.getSession failed:', e);
+  }
   const payload = {
     submitted_by: (currentUser && currentUser.email) || 'unknown',
     counts: data.items.map(i => ({
@@ -3811,8 +3827,11 @@ async function handleReviewDismiss(id) {
 
 // Updates the pending banner on the Count tab AND the red-dot badge on the
 // Stock Count nav button (visible from any tab). ASM only.
+// Also updates the persistent cloud-state row so ASM can always see what's
+// in the stock_counts table — kills the "nothing showing up" confusion.
 async function refreshPendingSubmissionsBanner() {
   const el = document.getElementById('pendingSubmissionsBanner');
+  const stateRow = document.getElementById('cloudStateRow');
   const badge = document.getElementById('countTabBadge');
   const setBadge = (n) => {
     if (!badge) return;
@@ -3826,17 +3845,51 @@ async function refreshPendingSubmissionsBanner() {
   };
   if (!isASM()) {
     if (el) { el.style.display = 'none'; el.innerHTML = ''; }
+    if (stateRow) { stateRow.style.display = 'none'; stateRow.innerHTML = ''; }
     setBadge(0);
     return;
   }
-  const list = await pullStockCountSubmissions();
+  // Full cloud-state read — one query, tells us everything
+  const sinceIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const { data: all, error } = await sb
+    .from('stock_counts')
+    .select('id,status,submitted_by,submitted_at,applied_by,applied_at')
+    .gte('submitted_at', sinceIso)
+    .order('submitted_at', { ascending: false });
+  const list = (all || []).filter(r => r.status === 'pending');
+  const applied = (all || []).filter(r => r.status === 'applied').length;
+  const dismissed = (all || []).filter(r => r.status === 'dismissed').length;
+  setBadge(list.length);
+  // Persistent cloud-state row — always visible to ASM on Count tab,
+  // even when there are zero pending, so it's obvious the pipeline is live.
+  if (stateRow) {
+    if (error) {
+      stateRow.style.display = '';
+      stateRow.innerHTML = `
+        <div style="background:#fef2f2; border:1px solid #fecaca; border-radius:10px; padding:10px 12px; font-size:0.82rem; color:#b91c1c; display:flex; gap:10px; align-items:center;">
+          <span style="font-size:1rem;">!</span>
+          <span><b>Cloud read failed</b> — ${esc(error.message || 'unknown error')}. The stock_counts table may not exist yet. Re-run supabase-setup.sql.</span>
+        </div>`;
+    } else {
+      const updated = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      const pendingColor = list.length > 0 ? '#f59e0b' : '#10b981';
+      stateRow.style.display = '';
+      stateRow.innerHTML = `
+        <div onclick="asmShowAllSubmissions()" style="cursor:pointer; background:var(--bg); border:1px solid var(--border); border-radius:10px; padding:10px 12px; display:flex; justify-content:space-between; align-items:center; gap:8px;">
+          <div style="display:flex; gap:14px; flex-wrap:wrap; font-size:0.82rem;">
+            <span><span style="display:inline-block; width:8px; height:8px; background:${pendingColor}; border-radius:50%; margin-right:5px;"></span><b>${list.length}</b> pending</span>
+            <span style="color:var(--text-light);"><b style="color:var(--text);">${applied}</b> applied</span>
+            <span style="color:var(--text-light);"><b style="color:var(--text);">${dismissed}</b> dismissed</span>
+          </div>
+          <div style="font-size:0.7rem; color:var(--text-light);">last 24h · ${updated}</div>
+        </div>`;
+    }
+  }
   if (!list.length) {
     if (el) { el.style.display = 'none'; el.innerHTML = ''; }
-    setBadge(0);
     return;
   }
-  setBadge(list.length);
-  if (!el) return; // Count tab DOM not ready yet — badge is enough
+  if (!el) return;
   el.style.display = '';
   const n = list.length;
   const latest = list[0];
@@ -3862,11 +3915,13 @@ async function refreshPendingSubmissionsBanner() {
 let pendingSubmissionsPoller = null;
 function startPendingSubmissionsPoller() {
   stopPendingSubmissionsPoller();
+  // 15s for ASM (needs fast visibility of new submissions), 45s for Welfare.
+  const interval = isASM() ? 15000 : 45000;
   pendingSubmissionsPoller = setInterval(() => {
     if (document.hidden) return; // save battery when tab is backgrounded
     refreshPendingSubmissionsBanner().catch(e => console.warn('Poll failed:', e));
     refreshPendingDeliveriesBanner().catch(e => console.warn('Delivery poll failed:', e));
-  }, 45000);
+  }, interval);
 }
 function stopPendingSubmissionsPoller() {
   if (pendingSubmissionsPoller) { clearInterval(pendingSubmissionsPoller); pendingSubmissionsPoller = null; }
