@@ -1191,7 +1191,7 @@ select.form-control {
    ================================================================= */
 // App version — bump alongside sw.js CACHE_NAME so ASM can verify which build
 // their device is actually running (shown under the email in the user menu).
-window.APP_VERSION = 'v43';
+window.APP_VERSION = 'v44';
 const SUPABASE_URL  = 'https://nogrnsjnwypihjaeulef.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5vZ3Juc2pud3lwaWhqYWV1bGVmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY0MDg2MzQsImV4cCI6MjA5MTk4NDYzNH0.ZxwsWtzzKO_nUSMQpH-FpbA2-5nYH8Nu1IegcKcYjW8';
 const PHOTO_BUCKET  = 'inventory-photos';
@@ -3302,6 +3302,12 @@ async function afterAuthReady() {
   }
   renderInventory();
   renderCategoryPills();
+  // Clean up leftover tombstone keys from v42/v43 — the tombstone system was
+  // removed in v44 because it hid pending submissions that shouldn't be hidden.
+  try {
+    localStorage.removeItem('processedSubmissionIds');
+    localStorage.removeItem('processedDeliveryIds');
+  } catch(_) {}
   // Subscribe to live updates so changes appear instantly on all devices
   try { subscribeToRealtime(); } catch(e) { console.warn('Realtime subscribe failed:', e); }
   // Show pending stock count submissions to ASM (silent for Welfare)
@@ -3384,35 +3390,8 @@ async function pushTransaction(txn) {
    Welfare submits counts → ASM reviews and applies
    ================================================================= */
 
-// Client-side "just-processed" tombstone. Any submission ID we have applied
-// or dismissed in this session is added here and will be filtered out of the
-// pending list forever, regardless of what the DB returns. Prevents the
-// card from re-appearing if:
-//   - DB replica lag returns stale 'pending' status after update
-//   - Realtime INSERT fires for a duplicate with same content
-//   - RLS silently rejects the UPDATE (user gets warning, card still hides)
-// Persists to localStorage so a reload doesn't bring back already-processed cards.
-const PROCESSED_SUBMISSIONS_KEY = 'processedSubmissionIds';
-function getProcessedSubmissionIds() {
-  try {
-    const raw = localStorage.getItem(PROCESSED_SUBMISSIONS_KEY);
-    return new Set(raw ? JSON.parse(raw) : []);
-  } catch(_) { return new Set(); }
-}
-function markSubmissionProcessedLocally(id) {
-  if (!id) return;
-  try {
-    const set = getProcessedSubmissionIds();
-    set.add(id);
-    // Cap to last 500 ids so localStorage doesn't grow unbounded
-    const arr = Array.from(set).slice(-500);
-    localStorage.setItem(PROCESSED_SUBMISSIONS_KEY, JSON.stringify(arr));
-  } catch(_) {}
-}
-
 // Fetch pending submissions (status='pending'), newest first.
-// Also filters out any IDs we've already processed in this session to defeat
-// replica lag and duplicate-row races.
+// Simple: trust the database. If a row says pending, it's pending.
 async function pullStockCountSubmissions() {
   const { data, error } = await sb
     .from('stock_counts')
@@ -3420,8 +3399,7 @@ async function pullStockCountSubmissions() {
     .eq('status', 'pending')
     .order('submitted_at', { ascending: false });
   if (error) { console.warn('Pull pending stock counts failed:', error); return []; }
-  const processed = getProcessedSubmissionIds();
-  return (data || []).filter(s => !processed.has(s.id));
+  return data || [];
 }
 
 // Fetch a single submission by id
@@ -3525,9 +3503,6 @@ async function markSubmissionStatus(id, newStatus, extraFields) {
     applied_at: new Date().toISOString()
   }, extraFields || {});
   console.log('[stock_counts] Marking', id, '→', newStatus, 'as', payload.applied_by);
-  // Tombstone the ID locally BEFORE the network call so the card disappears
-  // instantly and cannot come back via realtime or a slow replica.
-  markSubmissionProcessedLocally(id);
   const { data, error } = await sb
     .from('stock_counts')
     .update(payload)
@@ -4021,27 +3996,50 @@ async function refreshPendingSubmissionsBanner() {
   `;
 }
 
-// Polling fallback: if realtime isn't working (e.g. stock_counts not in the
-// supabase_realtime publication), this still pulls pending counts every 45s.
+// Polling fallback: if realtime isn't working (publication not enabled,
+// dropped websocket, etc.), this still keeps everyone in sync.
+// - ASM: pending-banner refresh every 15s
+// - Welfare: items pull every 60s so stock updates from ASM apply reach them
+//   even if their realtime subscription dropped
 let pendingSubmissionsPoller = null;
+let welfareItemsPoller = null;
+async function refreshItemsFromCloud() {
+  try {
+    await pullFromSupabase();
+    refreshActiveTab();
+  } catch (e) {
+    console.warn('Items refresh from cloud failed:', e);
+  }
+}
 function startPendingSubmissionsPoller() {
   stopPendingSubmissionsPoller();
-  // 15s for ASM (needs fast visibility of new submissions), 45s for Welfare.
   const interval = isASM() ? 15000 : 45000;
   pendingSubmissionsPoller = setInterval(() => {
     if (document.hidden) return; // save battery when tab is backgrounded
     refreshPendingSubmissionsBanner().catch(e => console.warn('Poll failed:', e));
     refreshPendingDeliveriesBanner().catch(e => console.warn('Delivery poll failed:', e));
   }, interval);
+  // Welfare also polls items so stock changes from ASM land even if realtime
+  // is silent. Skip for ASM — ASM pushes changes and already sees them locally.
+  if (!isASM()) {
+    welfareItemsPoller = setInterval(() => {
+      if (document.hidden) return;
+      refreshItemsFromCloud();
+    }, 60000);
+  }
 }
 function stopPendingSubmissionsPoller() {
   if (pendingSubmissionsPoller) { clearInterval(pendingSubmissionsPoller); pendingSubmissionsPoller = null; }
+  if (welfareItemsPoller) { clearInterval(welfareItemsPoller); welfareItemsPoller = null; }
 }
 // Refresh whenever the user returns to the tab (phone unlock, app switcher, etc.)
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden && currentUser) {
     refreshPendingSubmissionsBanner().catch(e => console.warn('Focus refresh failed:', e));
     refreshPendingDeliveriesBanner().catch(e => console.warn('Delivery focus refresh failed:', e));
+    // Also re-pull items so Welfare sees the latest stock right after
+    // unlocking their phone — don't make them wait for the next poll tick.
+    if (!isASM()) refreshItemsFromCloud();
   }
 });
 
@@ -4236,25 +4234,6 @@ async function submitDeliveryToASM(notes) {
 }
 
 // Pull all pending delivery submissions
-// Same tombstone system as stock_counts — any delivery we've processed in this
-// session is filtered out regardless of DB state.
-const PROCESSED_DELIVERIES_KEY = 'processedDeliveryIds';
-function getProcessedDeliveryIds() {
-  try {
-    const raw = localStorage.getItem(PROCESSED_DELIVERIES_KEY);
-    return new Set(raw ? JSON.parse(raw) : []);
-  } catch(_) { return new Set(); }
-}
-function markDeliveryProcessedLocally(id) {
-  if (!id) return;
-  try {
-    const set = getProcessedDeliveryIds();
-    set.add(id);
-    const arr = Array.from(set).slice(-500);
-    localStorage.setItem(PROCESSED_DELIVERIES_KEY, JSON.stringify(arr));
-  } catch(_) {}
-}
-
 async function pullDeliverySubmissions() {
   const { data, error } = await sb
     .from('deliveries')
@@ -4262,8 +4241,7 @@ async function pullDeliverySubmissions() {
     .eq('status', 'pending')
     .order('submitted_at', { ascending: false });
   if (error) { console.warn('Pull pending deliveries failed:', error); return []; }
-  const processed = getProcessedDeliveryIds();
-  return (data || []).filter(s => !processed.has(s.id));
+  return data || [];
 }
 
 async function getDeliverySubmission(id) {
@@ -4280,9 +4258,6 @@ async function markDeliveryStatus(id, newStatus, extraFields) {
     applied_at: new Date().toISOString()
   }, extraFields || {});
   console.log('[deliveries] Marking', id, '→', newStatus, 'as', payload.applied_by);
-  // Tombstone locally before the network call — card disappears instantly
-  // and cannot come back via realtime/replica lag.
-  markDeliveryProcessedLocally(id);
   const { data, error } = await sb
     .from('deliveries')
     .update(payload)
