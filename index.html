@@ -1195,7 +1195,7 @@ select.form-control {
    ================================================================= */
 // App version — bump alongside sw.js CACHE_NAME so ASM can verify which build
 // their device is actually running (shown under the email in the user menu).
-window.APP_VERSION = 'v39';
+window.APP_VERSION = 'v40';
 const SUPABASE_URL  = 'https://nogrnsjnwypihjaeulef.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5vZ3Juc2pud3lwaWhqYWV1bGVmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY0MDg2MzQsImV4cCI6MjA5MTk4NDYzNH0.ZxwsWtzzKO_nUSMQpH-FpbA2-5nYH8Nu1IegcKcYjW8';
 const PHOTO_BUCKET  = 'inventory-photos';
@@ -1452,24 +1452,45 @@ async function getPhotoBlob(id) {
 /* =================================================================
    UI HELPERS
    ================================================================= */
-function toast(msg, type = '') {
+function toast(msg, type = '', durationMs = 2500) {
   const c = document.getElementById('toastContainer');
   const t = document.createElement('div');
   t.className = 'toast ' + type;
   t.textContent = msg;
   c.appendChild(t);
   requestAnimationFrame(() => t.classList.add('show'));
-  setTimeout(() => { t.classList.remove('show'); setTimeout(() => t.remove(), 300); }, 2500);
+  setTimeout(() => { t.classList.remove('show'); setTimeout(() => t.remove(), 300); }, durationMs);
 }
 
 function openModal(html) {
+  console.log('[modal] openModal called, content length:', (html || '').length);
   document.getElementById('modalContent').innerHTML = html;
   document.getElementById('modalOverlay').style.display = 'flex';
 }
 
 function closeModal() {
+  console.log('[modal] closeModal called');
   document.getElementById('modalOverlay').style.display = 'none';
 }
+
+// Global error handler — if ANY function throws silently, surface it as a
+// toast so the user knows something is actually going wrong rather than
+// just seeing "nothing happens on click".
+window.addEventListener('error', (e) => {
+  try {
+    const msg = (e && e.message) ? e.message : 'Unknown error';
+    console.error('[window.error]', e.error || msg, e.filename, e.lineno);
+    toast('JS error: ' + msg, 'error', 5000);
+  } catch(_) {}
+});
+window.addEventListener('unhandledrejection', (e) => {
+  try {
+    const reason = e && e.reason;
+    const msg = reason && reason.message ? reason.message : (typeof reason === 'string' ? reason : 'Unhandled promise rejection');
+    console.error('[unhandledrejection]', reason);
+    toast('Async error: ' + msg, 'error', 5000);
+  } catch(_) {}
+});
 
 function showConfirm(title, msg, onYes) {
   openModal(`
@@ -3614,12 +3635,41 @@ async function applyStockCountSubmission(id) {
 async function dismissStockCountSubmission(id) {
   console.log('[stock_counts] dismissStockCountSubmission called for', id);
   if (!requireASM('Only ASM can dismiss a submission')) return;
-  showConfirm('Dismiss submission?', 'The count will be marked dismissed and removed from the queue without changing stock.', async () => {
-    console.log('[stock_counts] Dismiss confirmed, calling markSubmissionStatus');
-    const ok = await markSubmissionStatus(id, 'dismissed');
-    if (!ok) return; // error toast already shown
-    await finishReviewAndContinue('Submission dismissed');
-  });
+  // Optimistic UI: fade the card out of the list immediately so the click
+  // feels instant. No confirm dialog — dismiss is not destructive (data stays
+  // in DB, just marked dismissed and can be undone from Debug: all submissions).
+  fadeOutSubmissionCard(id);
+  toast('Dismissing…', 'info', 1200);
+  console.log('[stock_counts] Dismiss triggered, calling markSubmissionStatus');
+  const ok = await markSubmissionStatus(id, 'dismissed');
+  if (!ok) {
+    // Error toast already shown — re-render list so user can try again
+    if (typeof openPendingSubmissions === 'function') {
+      try { await openPendingSubmissions(); } catch(_) {}
+    }
+    return;
+  }
+  await finishReviewAndContinue('Submission dismissed');
+}
+
+// Optimistic UI helper — fades the matching card out of the list modal
+// so a click on Dismiss/Apply feels instant. If the DB call later fails,
+// the list is re-rendered with all pending items still visible.
+function fadeOutSubmissionCard(id) {
+  try {
+    // Find the onclick-bearing button with this id and walk up to its card
+    const btn = document.querySelector(`button[onclick*="${id}"]`);
+    const card = btn && btn.closest('.submission-card');
+    if (!card) return;
+    card.style.transition = 'opacity 0.25s ease, transform 0.25s ease, max-height 0.3s ease, margin 0.3s ease, padding 0.3s ease';
+    card.style.maxHeight = card.offsetHeight + 'px';
+    // Double RAF so the browser picks up the maxHeight baseline before we shrink
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      card.style.opacity = '0.3';
+      card.style.transform = 'translateX(20px)';
+      card.style.pointerEvents = 'none';
+    }));
+  } catch(_) {}
 }
 
 // Opens the list of pending submissions (ASM only)
@@ -3672,6 +3722,7 @@ async function openPendingSubmissions() {
 // Opens a full variance report for a specific submission with Apply / Dismiss buttons
 async function reviewSubmission(id) {
   console.log('[stock_counts] reviewSubmission called for', id);
+  toast('Opening review…', 'info', 1200);
   // Instant loading state so the user SEES their click registered — otherwise
   // an async fetch delay can look like nothing happened and they click again.
   openModal(`
@@ -4326,11 +4377,17 @@ async function applyDeliverySubmission(id) {
 
 async function dismissDeliverySubmission(id) {
   if (!requireASM('Only ASM can dismiss a delivery')) return;
-  showConfirm('Dismiss delivery?', 'The delivery will be marked dismissed and removed from the queue without changing stock.', async () => {
-    const ok = await markDeliveryStatus(id, 'dismissed');
-    if (!ok) return;
-    await finishDeliveryAndContinue('Delivery dismissed');
-  });
+  // Optimistic: fade the card out immediately. Re-render on failure.
+  fadeOutSubmissionCard(id);
+  toast('Dismissing delivery…', 'info', 1200);
+  const ok = await markDeliveryStatus(id, 'dismissed');
+  if (!ok) {
+    if (typeof openPendingDeliveries === 'function') {
+      try { await openPendingDeliveries(); } catch(_) {}
+    }
+    return;
+  }
+  await finishDeliveryAndContinue('Delivery dismissed');
 }
 
 async function openPendingDeliveries() {
