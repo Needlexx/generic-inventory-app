@@ -1191,7 +1191,7 @@ select.form-control {
    ================================================================= */
 // App version — bump alongside sw.js CACHE_NAME so ASM can verify which build
 // their device is actually running (shown under the email in the user menu).
-window.APP_VERSION = 'v44';
+window.APP_VERSION = 'v45';
 const SUPABASE_URL  = 'https://nogrnsjnwypihjaeulef.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5vZ3Juc2pud3lwaWhqYWV1bGVmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY0MDg2MzQsImV4cCI6MjA5MTk4NDYzNH0.ZxwsWtzzKO_nUSMQpH-FpbA2-5nYH8Nu1IegcKcYjW8';
 const PHOTO_BUCKET  = 'inventory-photos';
@@ -3549,20 +3549,26 @@ async function markSubmissionStatus(id, newStatus, extraFields) {
 async function finishReviewAndContinue(successToast, successType) {
   closeModal();
   if (typeof renderInventory === 'function') { try { renderInventory(); } catch(_) {} }
+  // Optimistically hide the banner immediately so ASM sees instant feedback.
+  // The re-query below confirms the true DB state once the replica catches up.
+  const bannerEl = document.getElementById('pendingSubmissionsBanner');
+  if (bannerEl) { bannerEl.style.display = 'none'; bannerEl.innerHTML = ''; }
+  const badgeEl = document.getElementById('countTabBadge');
+  if (badgeEl) { badgeEl.classList.remove('show'); badgeEl.textContent = ''; }
+  // Wait for DB replica to propagate the status change before querying.
+  // Without this, re-querying immediately can still return the just-updated
+  // row as 'pending' (Supabase replica lag ~200-800ms).
+  await new Promise(r => setTimeout(r, 1200));
   await refreshPendingSubmissionsBanner();
   const remaining = await pullStockCountSubmissions();
-  // Append remaining-count to the toast so ASM sees concrete progress — otherwise
-  // if Welfare spammed submissions, each apply re-opens the list showing another
-  // identical-looking card, and ASM can't tell anything happened.
   const suffix = remaining.length
     ? ` · ${remaining.length} more pending`
     : ' · all clear';
   toast(successToast + suffix, successType || 'success', 3500);
   if (remaining.length) {
-    // Let user see the toast for a moment before re-opening the list
-    setTimeout(() => { try { openPendingSubmissions(); } catch(_) {} }, 500);
+    setTimeout(() => { try { openPendingSubmissions(); } catch(_) {} }, 600);
   } else {
-    setTimeout(() => { toast('All submissions processed', 'success'); }, 550);
+    setTimeout(() => { toast('All submissions processed ✓', 'success'); }, 650);
   }
 }
 
@@ -4285,13 +4291,20 @@ async function markDeliveryStatus(id, newStatus, extraFields) {
 async function finishDeliveryAndContinue(successToast, successType) {
   closeModal();
   if (typeof renderInventory === 'function') { try { renderInventory(); } catch(_) {} }
+  // Optimistically hide banner immediately
+  const bannerEl = document.getElementById('pendingDeliveriesBanner');
+  if (bannerEl) { bannerEl.style.display = 'none'; bannerEl.innerHTML = ''; }
+  const badgeEl = document.getElementById('stockTabBadge');
+  if (badgeEl) { badgeEl.classList.remove('show'); badgeEl.textContent = ''; }
+  // Wait for DB replica lag before re-querying
+  await new Promise(r => setTimeout(r, 1200));
   await refreshPendingDeliveriesBanner();
   const remaining = await pullDeliverySubmissions();
   toast(successToast, successType || 'success');
   if (remaining.length) {
-    setTimeout(() => { try { openPendingDeliveries(); } catch(_) {} }, 350);
+    setTimeout(() => { try { openPendingDeliveries(); } catch(_) {} }, 600);
   } else {
-    setTimeout(() => { toast('All deliveries processed', 'success'); }, 450);
+    setTimeout(() => { toast('All deliveries processed ✓', 'success'); }, 650);
   }
 }
 
@@ -4592,13 +4605,23 @@ async function asmCheckForDeliveries() {
 }
 
 function handleDeliveryChange(payload) {
-  if (!isASM()) return;
-  if (payload.eventType === 'INSERT' && payload.new && payload.new.status === 'pending') {
-    const who = (payload.new.submitted_by || 'staff');
-    const units = (payload.new.summary && payload.new.summary.totalUnits) || '';
-    toast(`New delivery submitted by ${who}${units ? ` (+${units} units)` : ''}`, 'success');
+  if (isASM()) {
+    if (payload.eventType === 'INSERT' && payload.new && payload.new.status === 'pending') {
+      const who = (payload.new.submitted_by || 'staff');
+      const units = (payload.new.summary && payload.new.summary.totalUnits) || '';
+      toast(`New delivery submitted by ${who}${units ? ` (+${units} units)` : ''}`, 'success');
+    }
+    try { refreshPendingDeliveriesBanner(); } catch (e) { console.warn('Delivery banner refresh failed:', e); }
+  } else {
+    // Welfare: when a delivery is applied by ASM, pull fresh items so the
+    // increased stock quantities show up immediately.
+    if (payload.eventType === 'UPDATE' && payload.new && payload.new.status === 'applied') {
+      console.log('[Realtime] Delivery applied by ASM — pulling fresh items for Welfare');
+      refreshItemsFromCloud().then(() => {
+        toast('New stock added by ASM', 'success', 2500);
+      }).catch(e => console.warn('Items refresh after delivery apply failed:', e));
+    }
   }
-  try { refreshPendingDeliveriesBanner(); } catch (e) { console.warn('Delivery banner refresh failed:', e); }
 }
 
 /* =================================================================
@@ -4692,13 +4715,23 @@ function handleTxnChange(payload) {
 }
 
 function handleStockCountChange(payload) {
-  // Any change to pending queue — refresh ASM's banner, and toast new arrivals
-  if (!isASM()) return;
-  if (payload.eventType === 'INSERT' && payload.new && payload.new.status === 'pending') {
-    const who = (payload.new.submitted_by || 'staff');
-    toast(`New stock count submitted by ${who}`, 'success');
+  if (isASM()) {
+    // ASM: show toast for new submissions, refresh the pending banner
+    if (payload.eventType === 'INSERT' && payload.new && payload.new.status === 'pending') {
+      const who = payload.new.submitted_by || 'staff';
+      toast(`New stock count submitted by ${who}`, 'success');
+    }
+    try { refreshPendingSubmissionsBanner(); } catch (e) { console.warn('Banner refresh failed:', e); }
+  } else {
+    // Welfare: when a submission is marked 'applied' it means ASM changed stock.
+    // Pull fresh items from the cloud so Welfare sees the updated quantities.
+    if (payload.eventType === 'UPDATE' && payload.new && payload.new.status === 'applied') {
+      console.log('[Realtime] Submission applied by ASM — pulling fresh items for Welfare');
+      refreshItemsFromCloud().then(() => {
+        toast('Stock updated by ASM', 'success', 2500);
+      }).catch(e => console.warn('Items refresh after apply failed:', e));
+    }
   }
-  try { refreshPendingSubmissionsBanner(); } catch (e) { console.warn('Banner refresh failed:', e); }
 }
 
 function refreshActiveTab() {
