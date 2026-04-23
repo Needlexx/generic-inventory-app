@@ -1179,7 +1179,7 @@ select.form-control {
    ================================================================= */
 // App version — bump alongside sw.js CACHE_NAME so ASM can verify which build
 // their device is actually running (shown under the email in the user menu).
-window.APP_VERSION = 'v36';
+window.APP_VERSION = 'v37';
 const SUPABASE_URL  = 'https://nogrnsjnwypihjaeulef.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5vZ3Juc2pud3lwaWhqYWV1bGVmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY0MDg2MzQsImV4cCI6MjA5MTk4NDYzNH0.ZxwsWtzzKO_nUSMQpH-FpbA2-5nYH8Nu1IegcKcYjW8';
 const PHOTO_BUCKET  = 'inventory-photos';
@@ -3418,7 +3418,10 @@ async function submitCountToASM() {
 }
 
 // Mark a submission as applied/dismissed and VERIFY the DB row actually moved.
-// Returns true on success, false if RLS/network silently blocked the update.
+// Returns true on success, false if the update truly didn't land.
+// If .update().select() returns 0 rows with no error (can happen with some RLS
+// edge cases), we do a follow-up read to confirm whether the status actually
+// changed — if yes, treat as success rather than leaving the queue stuck.
 async function markSubmissionStatus(id, newStatus, extraFields) {
   const payload = Object.assign({
     status: newStatus,
@@ -3426,7 +3429,6 @@ async function markSubmissionStatus(id, newStatus, extraFields) {
     applied_at: new Date().toISOString()
   }, extraFields || {});
   console.log('[stock_counts] Marking', id, '→', newStatus, 'as', payload.applied_by);
-  // .select('*') makes the call return the updated rows so we can confirm it worked
   const { data, error } = await sb
     .from('stock_counts')
     .update(payload)
@@ -3437,14 +3439,35 @@ async function markSubmissionStatus(id, newStatus, extraFields) {
     toast(`Could not mark ${newStatus}: ` + (error.message || 'database error'), 'error');
     return false;
   }
-  if (!data || !data.length) {
-    // Zero rows returned — usually RLS blocking or id mismatch
-    console.error(`[stock_counts] Mark ${newStatus} returned no rows — submission ${id} not updated (likely RLS). Check that supabase-setup.sql was re-run.`);
-    toast(`Database blocked the update. Re-run supabase-setup.sql in the SQL Editor.`, 'error');
+  if (data && data.length) {
+    console.log(`[stock_counts] Marked ${newStatus} — DB returned`, data[0]);
+    return true;
+  }
+  // Zero rows returned — could be RLS SELECT quirk, could be the update genuinely
+  // didn't happen. Verify by reading the row back.
+  console.warn(`[stock_counts] Mark ${newStatus} returned no rows — verifying via read-back`);
+  const { data: check, error: checkErr } = await sb
+    .from('stock_counts')
+    .select('id,status')
+    .eq('id', id)
+    .maybeSingle();
+  if (checkErr) {
+    console.error(`[stock_counts] Verification read failed:`, checkErr);
+    toast(`Could not verify ${newStatus}: ` + (checkErr.message || 'database error'), 'error');
     return false;
   }
-  console.log(`[stock_counts] Marked ${newStatus} — DB returned`, data[0]);
-  return true;
+  if (!check) {
+    console.error(`[stock_counts] Submission ${id} no longer exists`);
+    toast(`Submission not found — it may have been removed`, 'warning');
+    return true; // row gone means it's out of the queue — treat as success
+  }
+  if (check.status === newStatus) {
+    console.log(`[stock_counts] Verified ${newStatus} in DB despite empty select() — treating as success`);
+    return true;
+  }
+  console.error(`[stock_counts] Update did not land — DB still shows status=${check.status}`);
+  toast(`Database blocked the update (status still "${check.status}"). Re-run supabase-setup.sql in the SQL Editor.`, 'error');
+  return false;
 }
 
 // After a successful apply/dismiss, close the review modal and either re-open
@@ -3596,8 +3619,42 @@ async function openPendingSubmissions() {
 
 // Opens a full variance report for a specific submission with Apply / Dismiss buttons
 async function reviewSubmission(id) {
-  const sub = await getStockCountSubmission(id);
-  if (!sub) { toast('Could not load submission', 'error'); return; }
+  console.log('[stock_counts] reviewSubmission called for', id);
+  // Instant loading state so the user SEES their click registered — otherwise
+  // an async fetch delay can look like nothing happened and they click again.
+  openModal(`
+    <div class="modal-header">
+      <h3>Loading submission…</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button>
+    </div>
+    <div style="text-align:center; padding:40px 20px;">
+      <span class="spinner"></span>
+      <div style="margin-top:12px; color:var(--text-light); font-size:0.9rem;">Fetching count details…</div>
+    </div>
+  `);
+  let sub;
+  try {
+    sub = await getStockCountSubmission(id);
+  } catch (err) {
+    console.error('[stock_counts] reviewSubmission fetch failed:', err);
+    toast('Could not load submission: ' + (err && err.message ? err.message : 'network error'), 'error');
+    closeModal();
+    return;
+  }
+  if (!sub) {
+    toast('Could not load submission — it may have been applied or removed', 'error');
+    closeModal();
+    // Bounce back to the list so the user isn't left on a blank screen
+    setTimeout(() => { try { openPendingSubmissions(); } catch(_) {} }, 250);
+    return;
+  }
+  if (sub.status !== 'pending') {
+    toast(`This submission was already ${sub.status}`, 'warning');
+    closeModal();
+    await refreshPendingSubmissionsBanner();
+    setTimeout(() => { try { openPendingSubmissions(); } catch(_) {} }, 250);
+    return;
+  }
   const counts = sub.counts || [];
   const summary = sub.summary || {};
   const submitter = esc(sub.submitted_by || 'unknown');
@@ -3667,13 +3724,53 @@ async function reviewSubmission(id) {
       </div>
     </details>
 
-    <div style="display:flex; gap:8px; margin-top:18px;">
+    <div style="display:flex; gap:8px; margin-top:18px;" id="reviewActionRow">
       <button class="btn btn-outline" style="flex:1;" onclick="openPendingSubmissions()">Back</button>
-      <button class="btn btn-danger" onclick="dismissStockCountSubmission('${sub.id}')">Dismiss</button>
-      <button class="btn btn-warning" style="flex:1;" onclick="applyStockCountSubmission('${sub.id}')">Apply to Stock</button>
+      <button class="btn btn-danger" id="reviewDismissBtn" onclick="handleReviewDismiss('${sub.id}')">Dismiss</button>
+      <button class="btn btn-warning" style="flex:1;" id="reviewApplyBtn" onclick="handleReviewApply('${sub.id}')">Apply to Stock</button>
     </div>
   `;
   openModal(html);
+}
+
+// Wrapper for Apply click: disables buttons + shows spinner so the click
+// visibly registers, then runs the real apply. Errors restore the buttons.
+async function handleReviewApply(id) {
+  const applyBtn = document.getElementById('reviewApplyBtn');
+  const dismissBtn = document.getElementById('reviewDismissBtn');
+  if (applyBtn) { applyBtn.disabled = true; applyBtn.innerHTML = '<span class="spinner"></span> Applying…'; }
+  if (dismissBtn) dismissBtn.disabled = true;
+  try {
+    await applyStockCountSubmission(id);
+  } finally {
+    // If the modal is still open (apply failed mid-flight), restore buttons
+    const stillThere = document.getElementById('reviewApplyBtn');
+    if (stillThere) {
+      stillThere.disabled = false;
+      stillThere.innerHTML = 'Apply to Stock';
+      const d = document.getElementById('reviewDismissBtn');
+      if (d) d.disabled = false;
+    }
+  }
+}
+
+// Wrapper for Dismiss click (same pattern as Apply)
+async function handleReviewDismiss(id) {
+  const applyBtn = document.getElementById('reviewApplyBtn');
+  const dismissBtn = document.getElementById('reviewDismissBtn');
+  if (dismissBtn) { dismissBtn.disabled = true; dismissBtn.innerHTML = '<span class="spinner"></span> Dismissing…'; }
+  if (applyBtn) applyBtn.disabled = true;
+  try {
+    await dismissStockCountSubmission(id);
+  } finally {
+    const stillThere = document.getElementById('reviewDismissBtn');
+    if (stillThere) {
+      stillThere.disabled = false;
+      stillThere.innerHTML = 'Dismiss';
+      const a = document.getElementById('reviewApplyBtn');
+      if (a) a.disabled = false;
+    }
+  }
 }
 
 // Updates the pending banner on the Count tab AND the red-dot badge on the
