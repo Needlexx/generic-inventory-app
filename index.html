@@ -1014,6 +1014,14 @@ select.form-control {
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
           <span>Check for pending counts</span>
         </button>
+        <button class="user-menu-item" id="userMenuCheckDeliveries" style="display:none;" onclick="asmCheckForDeliveries()" role="menuitem">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg>
+          <span>Check for pending deliveries</span>
+        </button>
+        <button class="user-menu-item" id="userMenuDebugSubmissions" style="display:none;" onclick="asmShowAllSubmissions()" role="menuitem">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+          <span>Debug: all submissions</span>
+        </button>
         <button class="user-menu-item" onclick="openChangePasswordModal(false)" role="menuitem">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
           <span>Change password</span>
@@ -1047,12 +1055,16 @@ select.form-control {
 
   <!-- === STOCK TAB === -->
   <div class="tab-page" id="pageStock">
+    <div id="pendingDeliveriesBanner" style="display:none; margin-bottom:12px;"></div>
     <div id="stockSummary"></div>
     <div class="card" style="padding:10px 12px;">
       <input class="form-control" id="stockSearch" placeholder="Search items..." oninput="renderInventory()" style="margin-bottom:8px;">
       <div class="cat-pills" id="catPills"></div>
     </div>
     <div id="stockList"></div>
+    <button id="recordDeliveryBtn" class="btn btn-success btn-block" onclick="openRecordDeliveryModal()" style="margin-top:10px;">
+      + Record New Delivery
+    </button>
     <button id="addItemBtn" class="btn btn-primary btn-block" onclick="openAddItemModal()" style="margin-top:10px; display:none;">+ Add New Item</button>
   </div>
 
@@ -1153,6 +1165,7 @@ select.form-control {
   <button class="tab-btn" onclick="switchTab('Stock')">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
     Stock
+    <span class="tab-badge" id="stockTabBadge" aria-hidden="true"></span>
   </button>
   <button class="tab-btn" onclick="switchTab('Count')">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
@@ -1179,7 +1192,7 @@ select.form-control {
    ================================================================= */
 // App version — bump alongside sw.js CACHE_NAME so ASM can verify which build
 // their device is actually running (shown under the email in the user menu).
-window.APP_VERSION = 'v37';
+window.APP_VERSION = 'v38';
 const SUPABASE_URL  = 'https://nogrnsjnwypihjaeulef.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5vZ3Juc2pud3lwaWhqYWV1bGVmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY0MDg2MzQsImV4cCI6MjA5MTk4NDYzNH0.ZxwsWtzzKO_nUSMQpH-FpbA2-5nYH8Nu1IegcKcYjW8';
 const PHOTO_BUCKET  = 'inventory-photos';
@@ -1245,6 +1258,12 @@ function applyRoleUI() {
   if (applyBtn) applyBtn.style.display = asm ? '' : 'none';
   const checkPendingBtn = document.getElementById('userMenuCheckPending');
   if (checkPendingBtn) checkPendingBtn.style.display = asm ? '' : 'none';
+  const checkDeliveriesBtn = document.getElementById('userMenuCheckDeliveries');
+  if (checkDeliveriesBtn) checkDeliveriesBtn.style.display = asm ? '' : 'none';
+  const debugSubsBtn = document.getElementById('userMenuDebugSubmissions');
+  if (debugSubsBtn) debugSubsBtn.style.display = asm ? '' : 'none';
+  const recordDeliveryBtn = document.getElementById('recordDeliveryBtn');
+  if (recordDeliveryBtn) recordDeliveryBtn.style.display = ''; // both roles can record
 }
 
 /* =================================================================
@@ -3269,6 +3288,8 @@ async function afterAuthReady() {
   try { subscribeToRealtime(); } catch(e) { console.warn('Realtime subscribe failed:', e); }
   // Show pending stock count submissions to ASM (silent for Welfare)
   try { refreshPendingSubmissionsBanner(); } catch(e) { console.warn('Pending banner refresh failed:', e); }
+  // Show pending delivery submissions to ASM (silent for Welfare)
+  try { refreshPendingDeliveriesBanner(); } catch(e) { console.warn('Pending deliveries banner refresh failed:', e); }
   // Polling fallback in case realtime isn't receiving stock_counts events
   try { startPendingSubmissionsPoller(); } catch(e) { console.warn('Pending poller start failed:', e); }
   // Orphan photo sweep (once per 24h)
@@ -3402,15 +3423,30 @@ async function submitCountToASM() {
     status: 'pending'
   };
   showSyncStatus('syncing');
-  const { error } = await sb.from('stock_counts').insert(payload);
+  console.log('[stock_counts] Submitting count with', payload.counts.length, 'items as', payload.submitted_by);
+  // .select('*').single() returns the inserted row so we can VERIFY it landed.
+  // Without this, a silently-blocked INSERT (RLS, missing table, etc.) looks
+  // successful and the row never appears in ASM's queue.
+  const { data: inserted, error } = await sb
+    .from('stock_counts')
+    .insert(payload)
+    .select('*')
+    .single();
   if (error) {
     console.error('submitCountToASM failed:', error);
     showSyncStatus('error');
     toast('Could not send to ASM: ' + (error.message || 'unknown error'), 'error');
     return false;
   }
+  if (!inserted || !inserted.id) {
+    console.error('submitCountToASM: INSERT returned no row — RLS may be blocking');
+    showSyncStatus('error');
+    toast('Submit blocked by database — re-run supabase-setup.sql in the SQL Editor', 'error');
+    return false;
+  }
+  console.log('[stock_counts] Submitted OK — row id:', inserted.id, 'status:', inserted.status);
   showSyncStatus('synced');
-  toast('Report sent to ASM for approval', 'success');
+  toast(`Report sent to ASM for approval (id ${inserted.id.slice(0, 8)}…)`, 'success');
   // Clear local counts since they are now safely stored server-side
   countState = {};
   renderCount();
@@ -3829,6 +3865,7 @@ function startPendingSubmissionsPoller() {
   pendingSubmissionsPoller = setInterval(() => {
     if (document.hidden) return; // save battery when tab is backgrounded
     refreshPendingSubmissionsBanner().catch(e => console.warn('Poll failed:', e));
+    refreshPendingDeliveriesBanner().catch(e => console.warn('Delivery poll failed:', e));
   }, 45000);
 }
 function stopPendingSubmissionsPoller() {
@@ -3838,6 +3875,7 @@ function stopPendingSubmissionsPoller() {
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden && currentUser) {
     refreshPendingSubmissionsBanner().catch(e => console.warn('Focus refresh failed:', e));
+    refreshPendingDeliveriesBanner().catch(e => console.warn('Delivery focus refresh failed:', e));
   }
 });
 
@@ -3859,6 +3897,615 @@ async function asmCheckForPending() {
     console.error('asmCheckForPending failed:', err);
     toast('Could not check: ' + (err && err.message ? err.message : 'unknown error'), 'error');
   }
+}
+
+// ASM debug view: shows EVERY stock_counts row regardless of status.
+// Useful for diagnosing "Welfare submitted but ASM sees nothing" — if this
+// list is also empty, the INSERT is being blocked; if rows appear with
+// status=applied/dismissed, they were already processed.
+async function asmShowAllSubmissions() {
+  closeUserMenu();
+  if (!requireASM('ASM only')) return;
+  const { data, error } = await sb
+    .from('stock_counts')
+    .select('id,submitted_by,submitted_at,status,applied_by,applied_at,counts')
+    .order('submitted_at', { ascending: false })
+    .limit(50);
+  if (error) {
+    console.error('asmShowAllSubmissions failed:', error);
+    toast('Debug read failed: ' + (error.message || 'database error'), 'error');
+    return;
+  }
+  const rows = data || [];
+  console.log('[debug] All stock_counts rows:', rows);
+  if (!rows.length) {
+    openModal(`
+      <div class="modal-header">
+        <h3>All Submissions (debug)</h3>
+        <button class="modal-close" onclick="closeModal()">&times;</button>
+      </div>
+      <p style="font-size:0.9rem; color:var(--text-light); padding:20px 0;">
+        <b>Zero rows in the stock_counts table.</b><br><br>
+        If Welfare has tried to submit, their INSERT is being blocked silently.
+        Most likely causes:<br>
+        1. supabase-setup.sql hasn't been re-run since adding stock_counts<br>
+        2. Welfare's browser is serving stale cached JS (have them hard-refresh)<br>
+        3. Welfare is signed into a different Supabase project
+      </p>
+    `);
+    return;
+  }
+  const statusPill = (s) => {
+    const color = s === 'pending' ? '#f59e0b' : s === 'applied' ? '#10b981' : '#6b7280';
+    return `<span style="background:${color}; color:white; padding:2px 8px; border-radius:10px; font-size:0.72rem; font-weight:600; text-transform:uppercase;">${esc(s)}</span>`;
+  };
+  const cards = rows.map(r => {
+    const when = new Date(r.submitted_at).toLocaleString('en-GB', { dateStyle: 'short', timeStyle: 'short' });
+    const count = (r.counts || []).length;
+    const appliedInfo = r.status !== 'pending' && r.applied_by
+      ? `<div style="font-size:0.72rem; color:var(--text-light); margin-top:4px;">by ${esc(r.applied_by)} ${r.applied_at ? '· ' + new Date(r.applied_at).toLocaleString('en-GB', { dateStyle: 'short', timeStyle: 'short' }) : ''}</div>`
+      : '';
+    return `
+      <div style="padding:10px 12px; border:1px solid var(--border); border-radius:8px; margin-bottom:8px;">
+        <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">
+          <div style="flex:1; min-width:0;">
+            <div style="font-weight:600; font-size:0.88rem;">${esc(r.submitted_by || 'unknown')}</div>
+            <div style="font-size:0.72rem; color:var(--text-light);">${when} · ${count} item${count !== 1 ? 's' : ''}</div>
+            ${appliedInfo}
+          </div>
+          ${statusPill(r.status)}
+        </div>
+        <div style="font-size:0.66rem; color:var(--text-light); margin-top:6px; font-family:monospace; opacity:0.6; word-break:break-all;">${esc(r.id)}</div>
+      </div>`;
+  }).join('');
+  const pending = rows.filter(r => r.status === 'pending').length;
+  const applied = rows.filter(r => r.status === 'applied').length;
+  const dismissed = rows.filter(r => r.status === 'dismissed').length;
+  openModal(`
+    <div class="modal-header">
+      <h3>All Submissions (debug)</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button>
+    </div>
+    <div style="font-size:0.82rem; color:var(--text-light); margin-bottom:12px;">
+      <b style="color:#f59e0b;">${pending} pending</b> ·
+      <b style="color:#10b981;">${applied} applied</b> ·
+      <b style="color:#6b7280;">${dismissed} dismissed</b>
+      · showing latest ${rows.length}
+    </div>
+    ${cards}
+  `);
+}
+
+/* =================================================================
+   DELIVERIES — Welfare records new stock arrivals, ASM approves,
+   approved qty is ADDED to existing stock (not replaced).
+   Mirrors the stock_counts approval flow but with additive semantics.
+   ================================================================= */
+
+// In-memory draft while the Record Delivery modal is open:
+// { [itemId]: qty }
+let deliveryDraft = {};
+
+function openRecordDeliveryModal() {
+  deliveryDraft = {};
+  renderRecordDeliveryModal();
+}
+
+function renderRecordDeliveryModal() {
+  const items = getItems().slice().sort((a, b) =>
+    (a.category || '').localeCompare(b.category || '') ||
+    (a.name || '').localeCompare(b.name || '')
+  );
+  const searchRaw = (document.getElementById('deliverySearchInput') && document.getElementById('deliverySearchInput').value) || '';
+  const search = searchRaw.trim().toLowerCase();
+  const filtered = search
+    ? items.filter(i =>
+        (i.name || '').toLowerCase().includes(search) ||
+        (i.category || '').toLowerCase().includes(search) ||
+        (i.productCode || '').toLowerCase().includes(search))
+    : items;
+
+  const rowHtml = (i) => {
+    const qty = Number(deliveryDraft[i.id]) || 0;
+    const newTotal = (Number(i.quantity) || 0) + qty;
+    return `
+      <div class="delivery-row" style="display:grid; grid-template-columns: 1fr auto; gap:8px; align-items:center; padding:10px 12px; border-bottom:1px solid var(--border);">
+        <div style="min-width:0;">
+          <div style="font-weight:600; font-size:0.88rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(i.name)}</div>
+          <div style="font-size:0.72rem; color:var(--text-light);">${esc(i.category || '')} · stock <b>${i.quantity}</b> ${esc(i.unit || '')} ${qty > 0 ? `→ <b style="color:#10b981;">${newTotal}</b>` : ''}</div>
+        </div>
+        <input type="number" inputmode="numeric" min="0" step="1" placeholder="0"
+          value="${qty || ''}"
+          data-item-id="${i.id}"
+          oninput="updateDeliveryDraft('${i.id}', this.value)"
+          style="width:72px; padding:6px 8px; text-align:right; border:1px solid var(--border); border-radius:6px; font-size:0.9rem;">
+      </div>`;
+  };
+
+  const selectedCount = Object.keys(deliveryDraft).filter(k => Number(deliveryDraft[k]) > 0).length;
+  const totalUnits = Object.values(deliveryDraft).reduce((sum, v) => sum + (Number(v) || 0), 0);
+  const notesVal = (document.getElementById('deliveryNotesInput') && document.getElementById('deliveryNotesInput').value) || '';
+
+  openModal(`
+    <div class="modal-header">
+      <h3>Record New Delivery</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button>
+    </div>
+    <p style="font-size:0.8rem; color:var(--text-light); margin-bottom:10px; line-height:1.5;">
+      Enter the quantity delivered for each item. The submission goes to ASM for approval, then the approved quantities are <b>added</b> to current stock.
+    </p>
+    <input class="form-control" id="deliverySearchInput" placeholder="Search items..." value="${esc(searchRaw)}" oninput="rerenderDeliveryList()" style="margin-bottom:10px;">
+    <div style="max-height:45vh; overflow:auto; border:1px solid var(--border); border-radius:8px; margin-bottom:10px;">
+      ${filtered.length ? filtered.map(rowHtml).join('') : '<div style="padding:20px; text-align:center; color:var(--text-light); font-size:0.88rem;">No items match your search.</div>'}
+    </div>
+    <textarea class="form-control" id="deliveryNotesInput" placeholder="Notes (optional) — PO number, supplier, etc." rows="2" oninput="noteDeliveryNotes()" style="margin-bottom:10px; font-size:0.85rem;">${esc(notesVal)}</textarea>
+    <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 2px; font-size:0.82rem; color:var(--text-light);">
+      <span><b style="color:var(--text);">${selectedCount}</b> item${selectedCount !== 1 ? 's' : ''} · <b style="color:var(--text);">${totalUnits}</b> unit${totalUnits !== 1 ? 's' : ''}</span>
+      <button class="btn btn-outline" onclick="clearDeliveryDraft()" style="padding:4px 12px; font-size:0.78rem;">Clear</button>
+    </div>
+    <button class="btn btn-primary btn-block" id="sendDeliveryBtn" onclick="sendDeliveryToASM()" ${selectedCount === 0 ? 'disabled' : ''}>
+      Send to ASM for approval
+    </button>
+  `);
+
+  // Refocus search & restore cursor position so the user can keep typing
+  const si = document.getElementById('deliverySearchInput');
+  if (si && searchRaw) { si.focus(); si.setSelectionRange(searchRaw.length, searchRaw.length); }
+}
+
+// Live update the draft as the user types a qty. Re-render the summary line
+// without redrawing the whole list to avoid losing input focus.
+function updateDeliveryDraft(itemId, val) {
+  const n = Math.max(0, parseInt(val, 10) || 0);
+  if (n > 0) deliveryDraft[itemId] = n;
+  else delete deliveryDraft[itemId];
+  // Cheap partial update: just refresh the summary line + send button state
+  const selectedCount = Object.keys(deliveryDraft).filter(k => Number(deliveryDraft[k]) > 0).length;
+  const sendBtn = document.getElementById('sendDeliveryBtn');
+  if (sendBtn) sendBtn.disabled = selectedCount === 0;
+}
+
+// The notes input is uncontrolled (we read its value on submit) — this function
+// exists so the onchange attribute is harmless if the element is later rebound.
+function noteDeliveryNotes() { /* no-op */ }
+
+function rerenderDeliveryList() { renderRecordDeliveryModal(); }
+
+function clearDeliveryDraft() {
+  deliveryDraft = {};
+  renderRecordDeliveryModal();
+}
+
+// Welfare (or ASM) sends the draft delivery to cloud as pending
+async function sendDeliveryToASM() {
+  const btn = document.getElementById('sendDeliveryBtn');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Sending…'; }
+  // Read notes value before the modal is torn down
+  const notesEl = document.getElementById('deliveryNotesInput');
+  const notes = notesEl ? (notesEl.value || '').trim() : '';
+  const ok = await submitDeliveryToASM(notes);
+  if (ok) {
+    closeModal();
+  } else if (btn) {
+    btn.disabled = false;
+    btn.textContent = 'Send to ASM for approval';
+  }
+}
+
+async function submitDeliveryToASM(notes) {
+  const items = getItems();
+  const lines = Object.keys(deliveryDraft)
+    .map(id => {
+      const qty = Number(deliveryDraft[id]) || 0;
+      if (qty <= 0) return null;
+      const it = items.find(x => x.id === id);
+      if (!it) return null;
+      return { id: it.id, name: it.name, category: it.category, unit: it.unit, qty };
+    })
+    .filter(Boolean);
+  if (!lines.length) {
+    toast('No items entered — type a quantity next to at least one item', 'warning');
+    return false;
+  }
+  const totalUnits = lines.reduce((s, l) => s + l.qty, 0);
+  const payload = {
+    submitted_by: (currentUser && currentUser.email) || 'unknown',
+    items: lines,
+    notes: notes || null,
+    summary: { totalItems: lines.length, totalUnits },
+    status: 'pending'
+  };
+  showSyncStatus('syncing');
+  console.log('[deliveries] Submitting delivery with', lines.length, 'items,', totalUnits, 'units as', payload.submitted_by);
+  const { data: inserted, error } = await sb
+    .from('deliveries')
+    .insert(payload)
+    .select('*')
+    .single();
+  if (error) {
+    console.error('submitDeliveryToASM failed:', error);
+    showSyncStatus('error');
+    const msg = error.message || 'unknown error';
+    // Give a hint if the table doesn't exist yet
+    if (/does not exist|relation .* does not exist/i.test(msg)) {
+      toast('Deliveries table not set up yet — run supabase-setup.sql in the SQL Editor', 'error');
+    } else {
+      toast('Could not send delivery: ' + msg, 'error');
+    }
+    return false;
+  }
+  if (!inserted || !inserted.id) {
+    showSyncStatus('error');
+    toast('Submit blocked by database — re-run supabase-setup.sql', 'error');
+    return false;
+  }
+  console.log('[deliveries] Submitted OK — row id:', inserted.id, 'status:', inserted.status);
+  showSyncStatus('synced');
+  toast(`Delivery sent to ASM for approval (${totalUnits} unit${totalUnits !== 1 ? 's' : ''})`, 'success');
+  deliveryDraft = {};
+  return true;
+}
+
+// Pull all pending delivery submissions
+async function pullDeliverySubmissions() {
+  const { data, error } = await sb
+    .from('deliveries')
+    .select('*')
+    .eq('status', 'pending')
+    .order('submitted_at', { ascending: false });
+  if (error) { console.warn('Pull pending deliveries failed:', error); return []; }
+  return data || [];
+}
+
+async function getDeliverySubmission(id) {
+  const { data, error } = await sb.from('deliveries').select('*').eq('id', id).single();
+  if (error) { console.warn('Get delivery failed:', error); return null; }
+  return data;
+}
+
+// Same verified-update pattern as markSubmissionStatus but for deliveries
+async function markDeliveryStatus(id, newStatus, extraFields) {
+  const payload = Object.assign({
+    status: newStatus,
+    applied_by: (currentUser && currentUser.email) || 'unknown',
+    applied_at: new Date().toISOString()
+  }, extraFields || {});
+  console.log('[deliveries] Marking', id, '→', newStatus, 'as', payload.applied_by);
+  const { data, error } = await sb
+    .from('deliveries')
+    .update(payload)
+    .eq('id', id)
+    .select('*');
+  if (error) {
+    console.error(`[deliveries] Mark ${newStatus} failed:`, error);
+    toast(`Could not mark ${newStatus}: ` + (error.message || 'database error'), 'error');
+    return false;
+  }
+  if (data && data.length) return true;
+  console.warn(`[deliveries] Mark ${newStatus} returned no rows — verifying via read-back`);
+  const { data: check, error: checkErr } = await sb
+    .from('deliveries').select('id,status').eq('id', id).maybeSingle();
+  if (checkErr) {
+    toast(`Could not verify ${newStatus}: ` + (checkErr.message || 'database error'), 'error');
+    return false;
+  }
+  if (!check) { toast('Delivery not found', 'warning'); return true; }
+  if (check.status === newStatus) return true;
+  toast(`Database blocked the update (status still "${check.status}"). Re-run supabase-setup.sql.`, 'error');
+  return false;
+}
+
+async function finishDeliveryAndContinue(successToast, successType) {
+  closeModal();
+  if (typeof renderInventory === 'function') { try { renderInventory(); } catch(_) {} }
+  await refreshPendingDeliveriesBanner();
+  const remaining = await pullDeliverySubmissions();
+  toast(successToast, successType || 'success');
+  if (remaining.length) {
+    setTimeout(() => { try { openPendingDeliveries(); } catch(_) {} }, 350);
+  } else {
+    setTimeout(() => { toast('All deliveries processed', 'success'); }, 450);
+  }
+}
+
+// ASM applies a delivery: ADDS qty to each item's existing stock
+async function applyDeliverySubmission(id) {
+  console.log('[deliveries] applyDeliverySubmission called for', id);
+  if (!requireASM('Only ASM can apply a delivery')) return;
+  try {
+    const sub = await getDeliverySubmission(id);
+    if (!sub) { toast('Delivery not found', 'error'); return; }
+    if (sub.status !== 'pending') {
+      toast('This delivery has already been processed', 'warning');
+      await refreshPendingDeliveriesBanner();
+      closeModal();
+      const remaining = await pullDeliverySubmissions();
+      if (remaining.length) setTimeout(() => openPendingDeliveries(), 250);
+      return;
+    }
+    const lines = sub.items || [];
+    const allItems = getItems();
+    const affected = [];
+    lines.forEach(l => {
+      const idx = allItems.findIndex(x => x.id === l.id);
+      if (idx < 0) {
+        console.warn('[deliveries] Item not found locally — skipped:', l.id, l.name);
+        return;
+      }
+      const before = Number(allItems[idx].quantity) || 0;
+      const add = Number(l.qty) || 0;
+      if (add <= 0) return;
+      const after = before + add;
+      affected.push({ id: l.id, name: allItems[idx].name, from: before, add, to: after });
+      allItems[idx].quantity = after;
+    });
+    console.log(`[deliveries] Apply: ${affected.length} of ${lines.length} lines will change`, affected);
+    if (!affected.length) {
+      const ok = await markDeliveryStatus(id, 'applied', { note: 'No matching items — nothing added' });
+      if (!ok) return;
+      await finishDeliveryAndContinue('Delivery marked applied — no matching items', 'warning');
+      return;
+    }
+    const pushPromises = affected.map(a => {
+      const full = allItems.find(x => x.id === a.id);
+      return Promise.resolve(pushItem(full)).catch(e => ({ _syncError: e, name: a.name }));
+    });
+    saveItems(allItems);
+    const results = await Promise.all(pushPromises);
+    const failed = results.filter(r => r && r._syncError);
+    const marked = await markDeliveryStatus(id, 'applied');
+    if (!marked) {
+      toast('Stock updated but delivery could not be marked applied — will still show until cleared', 'warning');
+      return;
+    }
+    if (failed.length) {
+      toast(`${failed.length} item(s) failed cloud sync — they will retry`, 'warning');
+    }
+    const totalAdded = affected.reduce((s, a) => s + a.add, 0);
+    await finishDeliveryAndContinue(`Added ${totalAdded} unit${totalAdded !== 1 ? 's' : ''} across ${affected.length} item${affected.length !== 1 ? 's' : ''}`);
+  } catch (err) {
+    console.error('[deliveries] applyDeliverySubmission failed:', err);
+    toast('Could not apply delivery: ' + (err && err.message ? err.message : 'unknown error'), 'error');
+  }
+}
+
+async function dismissDeliverySubmission(id) {
+  if (!requireASM('Only ASM can dismiss a delivery')) return;
+  showConfirm('Dismiss delivery?', 'The delivery will be marked dismissed and removed from the queue without changing stock.', async () => {
+    const ok = await markDeliveryStatus(id, 'dismissed');
+    if (!ok) return;
+    await finishDeliveryAndContinue('Delivery dismissed');
+  });
+}
+
+async function openPendingDeliveries() {
+  if (!requireASM('Only ASM can review pending deliveries')) return;
+  const list = await pullDeliverySubmissions();
+  if (!list.length) {
+    toast('No pending deliveries', 'success');
+    refreshPendingDeliveriesBanner();
+    return;
+  }
+  const cards = list.map(s => {
+    const when = new Date(s.submitted_at).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' });
+    const lines = s.items || [];
+    const totalUnits = (s.summary && s.summary.totalUnits) || lines.reduce((sum, l) => sum + (Number(l.qty) || 0), 0);
+    return `
+      <div class="submission-card">
+        <div class="head">
+          <div>
+            <div class="who">${esc(s.submitted_by || 'unknown')}</div>
+            <div class="when">${when}</div>
+          </div>
+        </div>
+        <div class="stats">
+          <span><b>${lines.length}</b> item${lines.length !== 1 ? 's' : ''}</span>
+          <span><b>${totalUnits}</b> unit${totalUnits !== 1 ? 's' : ''}</span>
+        </div>
+        ${s.notes ? `<div style="font-size:0.76rem; color:var(--text-light); margin:4px 0 8px; font-style:italic;">&ldquo;${esc(s.notes)}&rdquo;</div>` : ''}
+        <div class="actions">
+          <button class="btn btn-primary" onclick="reviewDelivery('${s.id}')">Review &amp; Apply</button>
+          <button class="btn btn-outline" onclick="dismissDeliverySubmission('${s.id}')">Dismiss</button>
+        </div>
+      </div>`;
+  }).join('');
+  openModal(`
+    <div class="modal-header">
+      <h3>Pending Deliveries</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button>
+    </div>
+    <p style="font-size:0.82rem; color:var(--text-light); margin-bottom:12px;">
+      ${list.length} delivery${list.length !== 1 ? ' submissions' : ''} waiting for approval. Approved quantities are <b>added</b> to stock.
+    </p>
+    ${cards}
+  `);
+}
+
+async function reviewDelivery(id) {
+  console.log('[deliveries] reviewDelivery called for', id);
+  openModal(`
+    <div class="modal-header">
+      <h3>Loading delivery…</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button>
+    </div>
+    <div style="text-align:center; padding:40px 20px;">
+      <span class="spinner"></span>
+      <div style="margin-top:12px; color:var(--text-light); font-size:0.9rem;">Fetching delivery details…</div>
+    </div>
+  `);
+  let sub;
+  try { sub = await getDeliverySubmission(id); }
+  catch (err) {
+    toast('Could not load delivery: ' + (err && err.message ? err.message : 'network error'), 'error');
+    closeModal(); return;
+  }
+  if (!sub) {
+    toast('Could not load delivery', 'error');
+    closeModal();
+    setTimeout(() => openPendingDeliveries(), 250);
+    return;
+  }
+  if (sub.status !== 'pending') {
+    toast(`This delivery was already ${sub.status}`, 'warning');
+    closeModal();
+    await refreshPendingDeliveriesBanner();
+    setTimeout(() => openPendingDeliveries(), 250);
+    return;
+  }
+  const lines = sub.items || [];
+  const allItems = getItems();
+  const submitter = esc(sub.submitted_by || 'unknown');
+  const when = new Date(sub.submitted_at).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' });
+  const totalUnits = (sub.summary && sub.summary.totalUnits) || lines.reduce((sum, l) => sum + (Number(l.qty) || 0), 0);
+
+  const rowHtml = (l) => {
+    const found = allItems.find(x => x.id === l.id);
+    const currentStock = found ? (Number(found.quantity) || 0) : null;
+    const add = Number(l.qty) || 0;
+    const missing = !found;
+    const newTotal = currentStock !== null ? currentStock + add : null;
+    return `
+      <div class="var-item-row">
+        <span class="nm">${esc(l.name)}${missing ? ' <span style="color:#ef4444; font-size:0.7rem;">(not in inventory)</span>' : ''}</span>
+        <span class="delta pos">+${add}</span>
+        <span class="pct ${missing ? '' : 'pos'}">${missing ? '—' : `${currentStock} → <b>${newTotal}</b>`}</span>
+      </div>`;
+  };
+
+  const missingCount = lines.filter(l => !allItems.find(x => x.id === l.id)).length;
+
+  openModal(`
+    <div class="modal-header">
+      <h3>Review Delivery</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="var-report-date">
+      From <b style="color:var(--text);">${submitter}</b> &middot; ${when} &middot; ${lines.length} item${lines.length !== 1 ? 's' : ''}
+    </div>
+    ${sub.notes ? `<div style="background:var(--bg); padding:10px 12px; border-radius:8px; font-size:0.82rem; color:var(--text); margin:10px 0; border-left:3px solid var(--primary);">${esc(sub.notes)}</div>` : ''}
+
+    <div class="var-kpi-grid">
+      <div class="var-kpi good">
+        <div class="var-kpi-val">+${totalUnits}</div>
+        <div class="var-kpi-lbl">Units delivered</div>
+      </div>
+      <div class="var-kpi">
+        <div class="var-kpi-val">${lines.length}</div>
+        <div class="var-kpi-lbl">Items</div>
+      </div>
+      <div class="var-kpi ${missingCount > 0 ? 'neg' : 'good'}">
+        <div class="var-kpi-val">${missingCount}</div>
+        <div class="var-kpi-lbl">Not in inventory</div>
+      </div>
+    </div>
+
+    <div class="var-section-title">All delivered items</div>
+    ${lines.map(rowHtml).join('')}
+
+    <div style="display:flex; gap:8px; margin-top:18px;">
+      <button class="btn btn-outline" style="flex:1;" onclick="openPendingDeliveries()">Back</button>
+      <button class="btn btn-danger" id="delivDismissBtn" onclick="handleDeliveryDismiss('${sub.id}')">Dismiss</button>
+      <button class="btn btn-warning" style="flex:1;" id="delivApplyBtn" onclick="handleDeliveryApply('${sub.id}')">Add to Stock</button>
+    </div>
+  `);
+}
+
+async function handleDeliveryApply(id) {
+  const applyBtn = document.getElementById('delivApplyBtn');
+  const dismissBtn = document.getElementById('delivDismissBtn');
+  if (applyBtn) { applyBtn.disabled = true; applyBtn.innerHTML = '<span class="spinner"></span> Adding…'; }
+  if (dismissBtn) dismissBtn.disabled = true;
+  try { await applyDeliverySubmission(id); }
+  finally {
+    const still = document.getElementById('delivApplyBtn');
+    if (still) { still.disabled = false; still.innerHTML = 'Add to Stock';
+      const d = document.getElementById('delivDismissBtn');
+      if (d) d.disabled = false;
+    }
+  }
+}
+
+async function handleDeliveryDismiss(id) {
+  const applyBtn = document.getElementById('delivApplyBtn');
+  const dismissBtn = document.getElementById('delivDismissBtn');
+  if (dismissBtn) { dismissBtn.disabled = true; dismissBtn.innerHTML = '<span class="spinner"></span> Dismissing…'; }
+  if (applyBtn) applyBtn.disabled = true;
+  try { await dismissDeliverySubmission(id); }
+  finally {
+    const still = document.getElementById('delivDismissBtn');
+    if (still) { still.disabled = false; still.innerHTML = 'Dismiss';
+      const a = document.getElementById('delivApplyBtn');
+      if (a) a.disabled = false;
+    }
+  }
+}
+
+// Updates the delivery banner on the Stock tab AND the red badge on the Stock
+// nav button (visible from any tab). ASM only.
+async function refreshPendingDeliveriesBanner() {
+  const el = document.getElementById('pendingDeliveriesBanner');
+  const badge = document.getElementById('stockTabBadge');
+  const setBadge = (n) => {
+    if (!badge) return;
+    if (n > 0) {
+      badge.textContent = n > 9 ? '9+' : String(n);
+      badge.classList.add('show');
+    } else {
+      badge.classList.remove('show');
+    }
+  };
+  if (!isASM()) {
+    if (el) { el.style.display = 'none'; el.innerHTML = ''; }
+    setBadge(0);
+    return;
+  }
+  const list = await pullDeliverySubmissions();
+  setBadge(list.length);
+  if (!el) return;
+  if (!list.length) {
+    el.style.display = 'none';
+    el.innerHTML = '';
+    return;
+  }
+  const latest = list[0];
+  const fromWho = esc(latest.submitted_by || 'staff');
+  const totalUnits = (latest.summary && latest.summary.totalUnits) || (latest.items || []).reduce((s, l) => s + (Number(l.qty) || 0), 0);
+  el.style.display = 'block';
+  el.innerHTML = `
+    <div class="pending-banner" onclick="openPendingDeliveries()" style="cursor:pointer; background:linear-gradient(135deg, #10b98122, #10b98108); border-left:4px solid #10b981;">
+      <div class="pending-banner-icon" style="background:#10b981;">📦</div>
+      <div class="pending-banner-text">
+        <div class="pending-banner-title">${list.length} pending deliver${list.length !== 1 ? 'ies' : 'y'}</div>
+        <div class="pending-banner-sub">Latest: +${totalUnits} units from ${fromWho} — tap to review</div>
+      </div>
+      <div class="pending-banner-arrow">&rsaquo;</div>
+    </div>
+  `;
+}
+
+async function asmCheckForDeliveries() {
+  closeUserMenu();
+  if (!requireASM('Only ASM can review pending deliveries')) return;
+  try {
+    await refreshPendingDeliveriesBanner();
+    const list = await pullDeliverySubmissions();
+    if (!list.length) { toast('No pending deliveries — all clear', 'success'); return; }
+    toast(`${list.length} pending — opening queue`, 'success');
+    openPendingDeliveries();
+  } catch (err) {
+    console.error('asmCheckForDeliveries failed:', err);
+    toast('Could not check: ' + (err && err.message ? err.message : 'unknown error'), 'error');
+  }
+}
+
+function handleDeliveryChange(payload) {
+  if (!isASM()) return;
+  if (payload.eventType === 'INSERT' && payload.new && payload.new.status === 'pending') {
+    const who = (payload.new.submitted_by || 'staff');
+    const units = (payload.new.summary && payload.new.summary.totalUnits) || '';
+    toast(`New delivery submitted by ${who}${units ? ` (+${units} units)` : ''}`, 'success');
+  }
+  try { refreshPendingDeliveriesBanner(); } catch (e) { console.warn('Delivery banner refresh failed:', e); }
 }
 
 /* =================================================================
@@ -3893,7 +4540,15 @@ function subscribeToRealtime() {
       if (status === 'CHANNEL_ERROR') console.warn('[Realtime] stock_counts channel error');
     });
 
-  realtimeChannels = [itemsCh, txnCh, stockCountCh];
+  // Delivery submissions — ASM sees new Welfare deliveries instantly.
+  const deliveriesCh = sb.channel('realtime-deliveries')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'deliveries' }, handleDeliveryChange)
+    .subscribe((status) => {
+      if (status === 'SUBSCRIBED') console.log('[Realtime] deliveries channel ready');
+      if (status === 'CHANNEL_ERROR') console.warn('[Realtime] deliveries channel error');
+    });
+
+  realtimeChannels = [itemsCh, txnCh, stockCountCh, deliveriesCh];
 }
 
 function unsubscribeRealtime() {
