@@ -1018,14 +1018,6 @@ select.form-control {
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg>
           <span>Check for pending deliveries</span>
         </button>
-        <button class="user-menu-item" id="userMenuDebugSubmissions" style="display:none;" onclick="asmShowAllSubmissions()" role="menuitem">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
-          <span>Debug: all submissions</span>
-        </button>
-        <button class="user-menu-item" id="userMenuResetProcessed" style="display:none;" onclick="resetProcessedTombstones()" role="menuitem">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>
-          <span>Reset processed cache</span>
-        </button>
         <button class="user-menu-item" onclick="openChangePasswordModal(false)" role="menuitem">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
           <span>Change password</span>
@@ -1199,7 +1191,7 @@ select.form-control {
    ================================================================= */
 // App version — bump alongside sw.js CACHE_NAME so ASM can verify which build
 // their device is actually running (shown under the email in the user menu).
-window.APP_VERSION = 'v42';
+window.APP_VERSION = 'v43';
 const SUPABASE_URL  = 'https://nogrnsjnwypihjaeulef.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5vZ3Juc2pud3lwaWhqYWV1bGVmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY0MDg2MzQsImV4cCI6MjA5MTk4NDYzNH0.ZxwsWtzzKO_nUSMQpH-FpbA2-5nYH8Nu1IegcKcYjW8';
 const PHOTO_BUCKET  = 'inventory-photos';
@@ -1267,10 +1259,6 @@ function applyRoleUI() {
   if (checkPendingBtn) checkPendingBtn.style.display = asm ? '' : 'none';
   const checkDeliveriesBtn = document.getElementById('userMenuCheckDeliveries');
   if (checkDeliveriesBtn) checkDeliveriesBtn.style.display = asm ? '' : 'none';
-  const debugSubsBtn = document.getElementById('userMenuDebugSubmissions');
-  if (debugSubsBtn) debugSubsBtn.style.display = asm ? '' : 'none';
-  const resetProcessedBtn = document.getElementById('userMenuResetProcessed');
-  if (resetProcessedBtn) resetProcessedBtn.style.display = asm ? '' : 'none';
   const recordDeliveryBtn = document.getElementById('recordDeliveryBtn');
   if (recordDeliveryBtn) recordDeliveryBtn.style.display = ''; // both roles can record
 }
@@ -3422,23 +3410,6 @@ function markSubmissionProcessedLocally(id) {
   } catch(_) {}
 }
 
-// ASM escape hatch — clear the local tombstone set if a card was hidden by
-// mistake or for debugging. Shown in the user menu as "Reset processed cache".
-async function resetProcessedTombstones() {
-  if (!requireASM('Only ASM can reset the cache')) return;
-  const subs = getProcessedSubmissionIds().size;
-  const dels = (typeof getProcessedDeliveryIds === 'function') ? getProcessedDeliveryIds().size : 0;
-  if (!subs && !dels) { toast('Nothing to clear', 'info'); return; }
-  if (!confirm(`Clear ${subs} stock-count + ${dels} delivery tombstones?\n\nThis will make any hidden submissions visible again if they're still 'pending' in the database.`)) return;
-  try {
-    localStorage.removeItem(PROCESSED_SUBMISSIONS_KEY);
-    localStorage.removeItem(PROCESSED_DELIVERIES_KEY);
-  } catch(_) {}
-  toast(`Cleared ${subs + dels} tombstones`, 'success');
-  if (typeof refreshPendingSubmissionsBanner === 'function') { try { await refreshPendingSubmissionsBanner(); } catch(_) {} }
-  if (typeof refreshPendingDeliveriesBanner === 'function') { try { await refreshPendingDeliveriesBanner(); } catch(_) {} }
-}
-
 // Fetch pending submissions (status='pending'), newest first.
 // Also filters out any IDs we've already processed in this session to defeat
 // replica lag and duplicate-row races.
@@ -4015,7 +3986,7 @@ async function refreshPendingSubmissionsBanner() {
       const pendingColor = list.length > 0 ? '#f59e0b' : '#10b981';
       stateRow.style.display = '';
       stateRow.innerHTML = `
-        <div onclick="asmShowAllSubmissions()" style="cursor:pointer; background:var(--bg); border:1px solid var(--border); border-radius:10px; padding:10px 12px; display:flex; justify-content:space-between; align-items:center; gap:8px;">
+        <div style="background:var(--bg); border:1px solid var(--border); border-radius:10px; padding:10px 12px; display:flex; justify-content:space-between; align-items:center; gap:8px;">
           <div style="display:flex; gap:14px; flex-wrap:wrap; font-size:0.82rem;">
             <span><span style="display:inline-block; width:8px; height:8px; background:${pendingColor}; border-radius:50%; margin-right:5px;"></span><b>${list.length}</b> pending</span>
             <span style="color:var(--text-light);"><b style="color:var(--text);">${applied}</b> applied</span>
@@ -4092,83 +4063,6 @@ async function asmCheckForPending() {
     console.error('asmCheckForPending failed:', err);
     toast('Could not check: ' + (err && err.message ? err.message : 'unknown error'), 'error');
   }
-}
-
-// ASM debug view: shows EVERY stock_counts row regardless of status.
-// Useful for diagnosing "Welfare submitted but ASM sees nothing" — if this
-// list is also empty, the INSERT is being blocked; if rows appear with
-// status=applied/dismissed, they were already processed.
-async function asmShowAllSubmissions() {
-  closeUserMenu();
-  if (!requireASM('ASM only')) return;
-  const { data, error } = await sb
-    .from('stock_counts')
-    .select('id,submitted_by,submitted_at,status,applied_by,applied_at,counts')
-    .order('submitted_at', { ascending: false })
-    .limit(50);
-  if (error) {
-    console.error('asmShowAllSubmissions failed:', error);
-    toast('Debug read failed: ' + (error.message || 'database error'), 'error');
-    return;
-  }
-  const rows = data || [];
-  console.log('[debug] All stock_counts rows:', rows);
-  if (!rows.length) {
-    openModal(`
-      <div class="modal-header">
-        <h3>All Submissions (debug)</h3>
-        <button class="modal-close" onclick="closeModal()">&times;</button>
-      </div>
-      <p style="font-size:0.9rem; color:var(--text-light); padding:20px 0;">
-        <b>Zero rows in the stock_counts table.</b><br><br>
-        If Welfare has tried to submit, their INSERT is being blocked silently.
-        Most likely causes:<br>
-        1. supabase-setup.sql hasn't been re-run since adding stock_counts<br>
-        2. Welfare's browser is serving stale cached JS (have them hard-refresh)<br>
-        3. Welfare is signed into a different Supabase project
-      </p>
-    `);
-    return;
-  }
-  const statusPill = (s) => {
-    const color = s === 'pending' ? '#f59e0b' : s === 'applied' ? '#10b981' : '#6b7280';
-    return `<span style="background:${color}; color:white; padding:2px 8px; border-radius:10px; font-size:0.72rem; font-weight:600; text-transform:uppercase;">${esc(s)}</span>`;
-  };
-  const cards = rows.map(r => {
-    const when = new Date(r.submitted_at).toLocaleString('en-GB', { dateStyle: 'short', timeStyle: 'short' });
-    const count = (r.counts || []).length;
-    const appliedInfo = r.status !== 'pending' && r.applied_by
-      ? `<div style="font-size:0.72rem; color:var(--text-light); margin-top:4px;">by ${esc(r.applied_by)} ${r.applied_at ? '· ' + new Date(r.applied_at).toLocaleString('en-GB', { dateStyle: 'short', timeStyle: 'short' }) : ''}</div>`
-      : '';
-    return `
-      <div style="padding:10px 12px; border:1px solid var(--border); border-radius:8px; margin-bottom:8px;">
-        <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">
-          <div style="flex:1; min-width:0;">
-            <div style="font-weight:600; font-size:0.88rem;">${esc(r.submitted_by || 'unknown')}</div>
-            <div style="font-size:0.72rem; color:var(--text-light);">${when} · ${count} item${count !== 1 ? 's' : ''}</div>
-            ${appliedInfo}
-          </div>
-          ${statusPill(r.status)}
-        </div>
-        <div style="font-size:0.66rem; color:var(--text-light); margin-top:6px; font-family:monospace; opacity:0.6; word-break:break-all;">${esc(r.id)}</div>
-      </div>`;
-  }).join('');
-  const pending = rows.filter(r => r.status === 'pending').length;
-  const applied = rows.filter(r => r.status === 'applied').length;
-  const dismissed = rows.filter(r => r.status === 'dismissed').length;
-  openModal(`
-    <div class="modal-header">
-      <h3>All Submissions (debug)</h3>
-      <button class="modal-close" onclick="closeModal()">&times;</button>
-    </div>
-    <div style="font-size:0.82rem; color:var(--text-light); margin-bottom:12px;">
-      <b style="color:#f59e0b;">${pending} pending</b> ·
-      <b style="color:#10b981;">${applied} applied</b> ·
-      <b style="color:#6b7280;">${dismissed} dismissed</b>
-      · showing latest ${rows.length}
-    </div>
-    ${cards}
-  `);
 }
 
 /* =================================================================
