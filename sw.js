@@ -1,4 +1,4 @@
-const CACHE_NAME = 'inventory-app-v45';
+const CACHE_NAME = 'inventory-app-v46';
 const ASSETS = [
   './',
   './index.html',
@@ -33,6 +33,10 @@ self.addEventListener('activate', event => {
 // Fetch — network-first for HTML, cache-first for CDN
 self.addEventListener('fetch', event => {
   const url = event.request.url;
+
+  // Never intercept Supabase requests — REST/auth/storage/realtime must always
+  // hit the network. Caching them returns stale rows after a refresh.
+  if (url.includes('.supabase.co')) return;
 
   // Network-first for HTML/navigation
   if (event.request.mode === 'navigate' || url.endsWith('index.html') || url.endsWith('/')) {
