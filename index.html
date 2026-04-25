@@ -20,6 +20,8 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
 <style>
 /* ========== DESIGN TOKENS — modern / techy ========== */
 :root {
@@ -1119,6 +1121,23 @@ select.form-control {
   <div class="tab-page" id="pageReports">
     <div class="card">
       <h3 style="font-size:0.95rem; margin-bottom:12px;">Generate Report</h3>
+      <div class="form-group">
+        <label class="form-label">Report Type</label>
+        <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:6px;">
+          <button class="btn btn-outline report-type-btn active" data-report-type="transaction" onclick="selectReportType('transaction')" style="padding:10px 4px; font-size:0.78rem; line-height:1.2;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:block; margin:0 auto 4px;"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+            Transactions
+          </button>
+          <button class="btn btn-outline report-type-btn" data-report-type="delivery" onclick="selectReportType('delivery')" style="padding:10px 4px; font-size:0.78rem; line-height:1.2;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:block; margin:0 auto 4px;"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>
+            Deliveries
+          </button>
+          <button class="btn btn-outline report-type-btn" data-report-type="stockcount" onclick="selectReportType('stockcount')" style="padding:10px 4px; font-size:0.78rem; line-height:1.2;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:block; margin:0 auto 4px;"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+            Stock Count
+          </button>
+        </div>
+      </div>
       <div style="display:flex; gap:8px; margin-bottom:12px;">
         <div class="form-group" style="flex:1;">
           <label class="form-label">From</label>
@@ -1130,10 +1149,16 @@ select.form-control {
         </div>
       </div>
       <button class="btn btn-primary btn-block" onclick="generateReport()">View Report</button>
-      <button class="btn btn-success btn-block" onclick="downloadExcelReport()" style="margin-top:8px;">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-        Download Excel Report
-      </button>
+      <div style="display:flex; gap:8px; margin-top:8px;">
+        <button class="btn btn-success" style="flex:1;" onclick="downloadExcelReport()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Excel
+        </button>
+        <button class="btn btn-danger" style="flex:1; background:#dc2626;" onclick="downloadPDFReport()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          PDF
+        </button>
+      </div>
     </div>
     <div id="fridayBanner"></div>
     <div style="display:flex; align-items:center; gap:8px; margin:12px 0;">
@@ -1191,7 +1216,7 @@ select.form-control {
    ================================================================= */
 // App version — bump alongside sw.js CACHE_NAME so ASM can verify which build
 // their device is actually running (shown under the email in the user menu).
-window.APP_VERSION = 'v46';
+window.APP_VERSION = 'v47';
 const SUPABASE_URL  = 'https://nogrnsjnwypihjaeulef.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5vZ3Juc2pud3lwaWhqYWV1bGVmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY0MDg2MzQsImV4cCI6MjA5MTk4NDYzNH0.ZxwsWtzzKO_nUSMQpH-FpbA2-5nYH8Nu1IegcKcYjW8';
 const PHOTO_BUCKET  = 'inventory-photos';
@@ -2812,6 +2837,8 @@ function initReports() {
     document.getElementById('reportTo').value = today();
   }
   checkFridayReport();
+  // Apply visual active state to default selected report-type button
+  selectReportType(currentReportType);
 }
 
 function checkFridayReport() {
@@ -2855,11 +2882,65 @@ function autoFridayReport() {
   checkFridayReport();
 }
 
+// Active report type — drives dispatcher in generateReport / downloadExcelReport / downloadPDFReport
+let currentReportType = 'transaction';
+
+function selectReportType(type) {
+  currentReportType = type;
+  document.querySelectorAll('.report-type-btn').forEach(b => {
+    const isActive = b.dataset.reportType === type;
+    b.classList.toggle('active', isActive);
+    b.style.background = isActive ? 'var(--primary)' : '';
+    b.style.color = isActive ? '#fff' : '';
+    b.style.borderColor = isActive ? 'var(--primary)' : '';
+  });
+  // Clear any previously rendered report
+  document.getElementById('reportSummary').innerHTML = '';
+  document.getElementById('reportTable').innerHTML = '';
+}
+
+// Pull deliveries for a date range. Includes only 'applied' submissions (i.e. ones
+// that actually changed stock), so the report reflects real arrivals not pending requests.
+async function fetchDeliveriesForRange(from, to) {
+  const fromIso = new Date(from + 'T00:00:00').toISOString();
+  const toIso   = new Date(to   + 'T23:59:59').toISOString();
+  const { data, error } = await sb
+    .from('deliveries')
+    .select('*')
+    .eq('status', 'applied')
+    .gte('submitted_at', fromIso)
+    .lte('submitted_at', toIso)
+    .order('submitted_at', { ascending: false });
+  if (error) { console.warn('fetchDeliveriesForRange failed:', error); toast('Could not load deliveries: ' + (error.message || ''), 'error'); return []; }
+  return data || [];
+}
+
+// Pull stock counts for a date range. Includes only 'applied' submissions so the
+// variance numbers reflect counts that actually changed inventory.
+async function fetchStockCountsForRange(from, to) {
+  const fromIso = new Date(from + 'T00:00:00').toISOString();
+  const toIso   = new Date(to   + 'T23:59:59').toISOString();
+  const { data, error } = await sb
+    .from('stock_counts')
+    .select('*')
+    .eq('status', 'applied')
+    .gte('submitted_at', fromIso)
+    .lte('submitted_at', toIso)
+    .order('submitted_at', { ascending: false });
+  if (error) { console.warn('fetchStockCountsForRange failed:', error); toast('Could not load stock counts: ' + (error.message || ''), 'error'); return []; }
+  return data || [];
+}
+
 function generateReport() {
   const from = document.getElementById('reportFrom').value;
   const to = document.getElementById('reportTo').value;
   if (!from || !to) { toast('Please select date range', 'warning'); return; }
+  if (currentReportType === 'delivery') return generateDeliveryReport(from, to);
+  if (currentReportType === 'stockcount') return generateStockCountReport(from, to);
+  return generateTransactionReport(from, to);
+}
 
+function generateTransactionReport(from, to) {
   const txns = getTransactions().filter(t => {
     const d = t.date.slice(0, 10);
     return d >= from && d <= to;
@@ -2903,11 +2984,137 @@ function generateReport() {
   </table></div></div>`;
 }
 
+async function generateDeliveryReport(from, to) {
+  document.getElementById('reportSummary').innerHTML = '<div style="padding:12px; text-align:center; color:var(--text-light);">Loading deliveries…</div>';
+  document.getElementById('reportTable').innerHTML = '';
+  const rows = await fetchDeliveriesForRange(from, to);
+  const totalDeliveries = rows.length;
+  const totalLines = rows.reduce((s, r) => s + ((r.items || []).length), 0);
+  const totalUnits = rows.reduce((s, r) => s + ((r.items || []).reduce((a, i) => a + (Number(i.qty) || 0), 0)), 0);
+
+  document.getElementById('reportSummary').innerHTML = `
+    <div class="stats-grid" style="margin-top:12px;">
+      <div class="stat-card"><div class="stat-value">${totalDeliveries}</div><div class="stat-label">Deliveries</div></div>
+      <div class="stat-card"><div class="stat-value">${totalLines}</div><div class="stat-label">Line Items</div></div>
+      <div class="stat-card"><div class="stat-value">${totalUnits}</div><div class="stat-label">Units Received</div></div>
+    </div>`;
+
+  if (!rows.length) {
+    document.getElementById('reportTable').innerHTML = '<div class="card"><div style="text-align:center; color:var(--text-light); padding:20px;">No applied deliveries in this period.</div></div>';
+    return;
+  }
+
+  // One row per delivery line so it matches the Excel/PDF export shape
+  const flat = [];
+  rows.forEach(r => {
+    const dt = new Date(r.submitted_at);
+    (r.items || []).forEach(i => {
+      flat.push({
+        date: dt,
+        deliveryId: r.id.slice(0, 8),
+        submittedBy: r.submitted_by,
+        appliedBy: r.applied_by || '-',
+        itemName: i.name,
+        category: i.category || '',
+        qty: i.qty,
+        unit: i.unit || 'pcs',
+        notes: r.notes || ''
+      });
+    });
+  });
+
+  document.getElementById('reportTable').innerHTML = `<div class="card"><div class="table-wrapper"><table class="report-table">
+    <thead><tr><th>Date</th><th>Time</th><th>Delivery</th><th>Submitted By</th><th>Approved By</th><th>Item</th><th>Qty</th><th>Unit</th></tr></thead>
+    <tbody>${flat.map(r => `<tr>
+      <td>${r.date.toLocaleDateString('en-GB', {day:'2-digit',month:'short',year:'numeric'})}</td>
+      <td>${r.date.toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit'})}</td>
+      <td>#${esc(r.deliveryId)}</td>
+      <td>${esc(r.submittedBy)}</td>
+      <td>${esc(r.appliedBy)}</td>
+      <td>${esc(r.itemName)}</td>
+      <td>${r.qty}</td>
+      <td>${esc(r.unit)}</td>
+    </tr>`).join('')}</tbody>
+  </table></div></div>`;
+}
+
+async function generateStockCountReport(from, to) {
+  document.getElementById('reportSummary').innerHTML = '<div style="padding:12px; text-align:center; color:var(--text-light);">Loading stock counts…</div>';
+  document.getElementById('reportTable').innerHTML = '';
+  const rows = await fetchStockCountsForRange(from, to);
+  const totalCounts = rows.length;
+  let totalLines = 0, totalAbsVar = 0, totalSystem = 0, totalActual = 0;
+  rows.forEach(r => {
+    (r.counts || []).forEach(c => {
+      totalLines++;
+      totalAbsVar += Math.abs(Number(c.variance) || 0);
+      totalSystem += Number(c.system) || 0;
+      totalActual += Number(c.actual) || 0;
+    });
+  });
+  const accuracy = totalSystem > 0 ? Math.max(0, 100 - (totalAbsVar / totalSystem) * 100) : 100;
+
+  document.getElementById('reportSummary').innerHTML = `
+    <div class="stats-grid" style="margin-top:12px;">
+      <div class="stat-card"><div class="stat-value">${totalCounts}</div><div class="stat-label">Counts</div></div>
+      <div class="stat-card"><div class="stat-value">${totalLines}</div><div class="stat-label">Items Counted</div></div>
+      <div class="stat-card"><div class="stat-value">${accuracy.toFixed(1)}%</div><div class="stat-label">Accuracy</div></div>
+      <div class="stat-card"><div class="stat-value">${totalAbsVar}</div><div class="stat-label">Total Variance</div></div>
+    </div>`;
+
+  if (!rows.length) {
+    document.getElementById('reportTable').innerHTML = '<div class="card"><div style="text-align:center; color:var(--text-light); padding:20px;">No applied stock counts in this period.</div></div>';
+    return;
+  }
+
+  // Show every count line with variance highlighted
+  const flat = [];
+  rows.forEach(r => {
+    const dt = new Date(r.submitted_at);
+    (r.counts || []).forEach(c => {
+      flat.push({
+        date: dt,
+        countId: r.id.slice(0, 8),
+        submittedBy: r.submitted_by,
+        appliedBy: r.applied_by || '-',
+        itemName: c.name,
+        category: c.category || '',
+        unit: c.unit || 'pcs',
+        system: Number(c.system) || 0,
+        actual: Number(c.actual) || 0,
+        variance: Number(c.variance) || 0
+      });
+    });
+  });
+
+  document.getElementById('reportTable').innerHTML = `<div class="card"><div class="table-wrapper"><table class="report-table">
+    <thead><tr><th>Date</th><th>Count</th><th>By</th><th>Item</th><th>System</th><th>Actual</th><th>Variance</th></tr></thead>
+    <tbody>${flat.map(r => {
+      const vColor = r.variance === 0 ? 'inherit' : (r.variance > 0 ? '#10b981' : '#ef4444');
+      const vText = r.variance > 0 ? `+${r.variance}` : `${r.variance}`;
+      return `<tr>
+        <td>${r.date.toLocaleDateString('en-GB', {day:'2-digit',month:'short'})}</td>
+        <td>#${esc(r.countId)}</td>
+        <td>${esc(r.submittedBy)}</td>
+        <td>${esc(r.itemName)}</td>
+        <td>${r.system}</td>
+        <td>${r.actual}</td>
+        <td style="color:${vColor}; font-weight:600;">${vText}</td>
+      </tr>`;
+    }).join('')}</tbody>
+  </table></div></div>`;
+}
+
 function downloadExcelReport() {
   const from = document.getElementById('reportFrom').value;
   const to = document.getElementById('reportTo').value;
   if (!from || !to) { toast('Please select date range', 'warning'); return; }
+  if (currentReportType === 'delivery') return downloadExcelDeliveryReport(from, to);
+  if (currentReportType === 'stockcount') return downloadExcelStockCountReport(from, to);
+  return downloadExcelTransactionReport(from, to);
+}
 
+function downloadExcelTransactionReport(from, to) {
   const txns = getTransactions().filter(t => {
     const d = t.date.slice(0, 10);
     return d >= from && d <= to;
@@ -2986,8 +3193,251 @@ function downloadExcelReport() {
   ws4['!cols'] = [{wch:35},{wch:15},{wch:12},{wch:12},{wch:12},{wch:12},{wch:10}];
   XLSX.utils.book_append_sheet(wb, ws4, 'Reorder List');
 
-  XLSX.writeFile(wb, `Inventory_Report_${from}_to_${to}.xlsx`);
+  XLSX.writeFile(wb, `Transaction_Report_${from}_to_${to}.xlsx`);
   toast('Excel report downloaded!', 'success');
+}
+
+async function downloadExcelDeliveryReport(from, to) {
+  toast('Building delivery report…', 'info', 1500);
+  const rows = await fetchDeliveriesForRange(from, to);
+  const wb = XLSX.utils.book_new();
+
+  const totalUnits = rows.reduce((s, r) => s + ((r.items || []).reduce((a, i) => a + (Number(i.qty) || 0), 0)), 0);
+  const summary = [
+    ['Delivery Report'],
+    ['Period', `${from} to ${to}`],
+    ['Generated', new Date().toLocaleString()],
+    [],
+    ['Total Deliveries', rows.length],
+    ['Total Line Items', rows.reduce((s, r) => s + ((r.items || []).length), 0)],
+    ['Total Units Received', totalUnits],
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summary), 'Summary');
+
+  // Per-line detail
+  const lines = [['Date', 'Time', 'Delivery #', 'Submitted By', 'Approved By', 'Item', 'Category', 'Quantity', 'Unit', 'Notes']];
+  rows.forEach(r => {
+    const dt = new Date(r.submitted_at);
+    const ds = dt.toLocaleDateString('en-GB', {day:'2-digit',month:'short',year:'numeric'});
+    const ts = dt.toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit'});
+    (r.items || []).forEach(i => {
+      lines.push([ds, ts, r.id.slice(0, 8), r.submitted_by, r.applied_by || '', i.name, i.category || '', i.qty, i.unit || 'pcs', r.notes || '']);
+    });
+  });
+  const ws = XLSX.utils.aoa_to_sheet(lines);
+  ws['!cols'] = [{wch:12},{wch:8},{wch:12},{wch:24},{wch:24},{wch:32},{wch:14},{wch:10},{wch:8},{wch:24}];
+  XLSX.utils.book_append_sheet(wb, ws, 'Deliveries');
+
+  // Per-delivery summary
+  const perDel = [['Date', 'Delivery #', 'Submitted By', 'Approved By', 'Items', 'Total Units', 'Notes']];
+  rows.forEach(r => {
+    const totalQty = (r.items || []).reduce((a, i) => a + (Number(i.qty) || 0), 0);
+    perDel.push([new Date(r.submitted_at).toLocaleString('en-GB'), r.id.slice(0, 8), r.submitted_by, r.applied_by || '', (r.items || []).length, totalQty, r.notes || '']);
+  });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(perDel), 'Per Delivery');
+
+  XLSX.writeFile(wb, `Delivery_Report_${from}_to_${to}.xlsx`);
+  toast('Delivery report downloaded!', 'success');
+}
+
+async function downloadExcelStockCountReport(from, to) {
+  toast('Building stock count report…', 'info', 1500);
+  const rows = await fetchStockCountsForRange(from, to);
+  const wb = XLSX.utils.book_new();
+
+  let totalLines = 0, totalAbsVar = 0, totalSystem = 0;
+  rows.forEach(r => (r.counts || []).forEach(c => {
+    totalLines++;
+    totalAbsVar += Math.abs(Number(c.variance) || 0);
+    totalSystem += Number(c.system) || 0;
+  }));
+  const accuracy = totalSystem > 0 ? Math.max(0, 100 - (totalAbsVar / totalSystem) * 100) : 100;
+
+  const summary = [
+    ['Stock Count Report'],
+    ['Period', `${from} to ${to}`],
+    ['Generated', new Date().toLocaleString()],
+    [],
+    ['Total Counts Submitted', rows.length],
+    ['Items Counted', totalLines],
+    ['Total Absolute Variance', totalAbsVar],
+    ['Overall Accuracy %', accuracy.toFixed(2)],
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summary), 'Summary');
+
+  // Variance detail per line
+  const lines = [['Date', 'Count #', 'Submitted By', 'Approved By', 'Item', 'Category', 'Unit', 'System', 'Actual', 'Variance', 'Variance %']];
+  rows.forEach(r => {
+    const ds = new Date(r.submitted_at).toLocaleDateString('en-GB', {day:'2-digit',month:'short',year:'numeric'});
+    (r.counts || []).forEach(c => {
+      const sys = Number(c.system) || 0;
+      const variance = Number(c.variance) || 0;
+      const pct = sys > 0 ? ((variance / sys) * 100).toFixed(1) : '';
+      lines.push([ds, r.id.slice(0, 8), r.submitted_by, r.applied_by || '', c.name, c.category || '', c.unit || 'pcs', sys, Number(c.actual) || 0, variance, pct]);
+    });
+  });
+  const ws = XLSX.utils.aoa_to_sheet(lines);
+  ws['!cols'] = [{wch:12},{wch:12},{wch:24},{wch:24},{wch:32},{wch:14},{wch:8},{wch:9},{wch:9},{wch:10},{wch:11}];
+  XLSX.utils.book_append_sheet(wb, ws, 'Variance Detail');
+
+  // Per-count summary (one row per submission)
+  const perCount = [['Date', 'Count #', 'Submitted By', 'Approved By', 'Items', 'System Total', 'Actual Total', 'Net Variance', 'Accuracy %']];
+  rows.forEach(r => {
+    const sys = (r.counts || []).reduce((a, c) => a + (Number(c.system) || 0), 0);
+    const act = (r.counts || []).reduce((a, c) => a + (Number(c.actual) || 0), 0);
+    const absV = (r.counts || []).reduce((a, c) => a + Math.abs(Number(c.variance) || 0), 0);
+    const acc = sys > 0 ? Math.max(0, 100 - (absV / sys) * 100).toFixed(2) : '100.00';
+    perCount.push([new Date(r.submitted_at).toLocaleString('en-GB'), r.id.slice(0, 8), r.submitted_by, r.applied_by || '', (r.counts || []).length, sys, act, act - sys, acc]);
+  });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(perCount), 'Per Count');
+
+  XLSX.writeFile(wb, `StockCount_Report_${from}_to_${to}.xlsx`);
+  toast('Stock count report downloaded!', 'success');
+}
+
+/* =================================================================
+   PDF EXPORT — uses jsPDF + autoTable. Same shape as Excel reports.
+   ================================================================= */
+function downloadPDFReport() {
+  const from = document.getElementById('reportFrom').value;
+  const to = document.getElementById('reportTo').value;
+  if (!from || !to) { toast('Please select date range', 'warning'); return; }
+  if (!window.jspdf || !window.jspdf.jsPDF) { toast('PDF library not loaded yet — refresh and try again', 'error'); return; }
+  if (currentReportType === 'delivery') return downloadPDFDeliveryReport(from, to);
+  if (currentReportType === 'stockcount') return downloadPDFStockCountReport(from, to);
+  return downloadPDFTransactionReport(from, to);
+}
+
+function _newPdf(title, from, to) {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+  doc.setFontSize(16);
+  doc.text(title, 40, 40);
+  doc.setFontSize(10);
+  doc.setTextColor(100);
+  doc.text(`Period: ${from} to ${to}`, 40, 58);
+  doc.text(`Generated: ${new Date().toLocaleString()}`, 40, 72);
+  doc.setTextColor(0);
+  return doc;
+}
+
+function downloadPDFTransactionReport(from, to) {
+  const txns = getTransactions().filter(t => {
+    const d = t.date.slice(0, 10);
+    return d >= from && d <= to;
+  });
+  const doc = _newPdf('Transaction Report', from, to);
+  const totalItems = txns.reduce((s, t) => s + t.items.reduce((a, i) => a + i.qty, 0), 0);
+  doc.setFontSize(10);
+  doc.text(`Transactions: ${txns.length}    Items issued: ${totalItems}`, 40, 92);
+
+  const body = [];
+  txns.sort((a, b) => new Date(b.date) - new Date(a.date)).forEach(t => {
+    const dt = new Date(t.date);
+    const ds = dt.toLocaleDateString('en-GB', {day:'2-digit',month:'short',year:'numeric'});
+    const ts = dt.toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit'});
+    t.items.forEach(i => {
+      body.push([ds, ts, t.staffName || '-', t.userName, t.userRoom || '-', i.name, String(i.qty), i.unit || 'pcs']);
+    });
+  });
+  doc.autoTable({
+    startY: 110,
+    head: [['Date', 'Time', 'Staff', 'User', 'Room', 'Item', 'Qty', 'Unit']],
+    body,
+    styles: { fontSize: 8, cellPadding: 3 },
+    headStyles: { fillColor: [37, 99, 235] },
+    didDrawPage: (data) => _pdfFooter(doc, data)
+  });
+  doc.save(`Transaction_Report_${from}_to_${to}.pdf`);
+  toast('PDF report downloaded!', 'success');
+}
+
+async function downloadPDFDeliveryReport(from, to) {
+  toast('Building delivery PDF…', 'info', 1500);
+  const rows = await fetchDeliveriesForRange(from, to);
+  const doc = _newPdf('Delivery Report', from, to);
+  const totalUnits = rows.reduce((s, r) => s + ((r.items || []).reduce((a, i) => a + (Number(i.qty) || 0), 0)), 0);
+  const totalLines = rows.reduce((s, r) => s + ((r.items || []).length), 0);
+  doc.setFontSize(10);
+  doc.text(`Deliveries: ${rows.length}    Line items: ${totalLines}    Units received: ${totalUnits}`, 40, 92);
+
+  const body = [];
+  rows.forEach(r => {
+    const dt = new Date(r.submitted_at);
+    const ds = dt.toLocaleDateString('en-GB', {day:'2-digit',month:'short',year:'numeric'});
+    const ts = dt.toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit'});
+    (r.items || []).forEach(i => {
+      body.push([ds, ts, '#' + r.id.slice(0, 8), r.submitted_by, r.applied_by || '-', i.name, String(i.qty), i.unit || 'pcs']);
+    });
+  });
+  doc.autoTable({
+    startY: 110,
+    head: [['Date', 'Time', 'Delivery', 'Submitted By', 'Approved By', 'Item', 'Qty', 'Unit']],
+    body,
+    styles: { fontSize: 8, cellPadding: 3 },
+    headStyles: { fillColor: [16, 185, 129] },
+    didDrawPage: (data) => _pdfFooter(doc, data)
+  });
+  doc.save(`Delivery_Report_${from}_to_${to}.pdf`);
+  toast('Delivery PDF downloaded!', 'success');
+}
+
+async function downloadPDFStockCountReport(from, to) {
+  toast('Building stock count PDF…', 'info', 1500);
+  const rows = await fetchStockCountsForRange(from, to);
+  const doc = _newPdf('Stock Count Variance Report', from, to);
+  let totalLines = 0, totalAbsVar = 0, totalSystem = 0;
+  rows.forEach(r => (r.counts || []).forEach(c => {
+    totalLines++;
+    totalAbsVar += Math.abs(Number(c.variance) || 0);
+    totalSystem += Number(c.system) || 0;
+  }));
+  const accuracy = totalSystem > 0 ? Math.max(0, 100 - (totalAbsVar / totalSystem) * 100) : 100;
+  doc.setFontSize(10);
+  doc.text(`Counts: ${rows.length}    Items counted: ${totalLines}    Variance: ${totalAbsVar}    Accuracy: ${accuracy.toFixed(1)}%`, 40, 92);
+
+  const body = [];
+  rows.forEach(r => {
+    const dt = new Date(r.submitted_at);
+    const ds = dt.toLocaleDateString('en-GB', {day:'2-digit',month:'short',year:'numeric'});
+    (r.counts || []).forEach(c => {
+      const sys = Number(c.system) || 0;
+      const variance = Number(c.variance) || 0;
+      const pct = sys > 0 ? ((variance / sys) * 100).toFixed(1) + '%' : '-';
+      body.push([ds, '#' + r.id.slice(0, 8), r.submitted_by, c.name, String(sys), String(Number(c.actual) || 0), (variance > 0 ? '+' : '') + variance, pct]);
+    });
+  });
+  doc.autoTable({
+    startY: 110,
+    head: [['Date', 'Count', 'By', 'Item', 'System', 'Actual', 'Variance', 'Variance %']],
+    body,
+    styles: { fontSize: 8, cellPadding: 3 },
+    headStyles: { fillColor: [220, 38, 38] },
+    didDrawCell: (data) => {
+      // Highlight non-zero variance cells
+      if (data.section === 'body' && data.column.index === 6) {
+        const v = data.cell.raw;
+        if (typeof v === 'string' && v !== '0') {
+          data.cell.styles.textColor = v.startsWith('-') ? [220, 38, 38] : [16, 185, 129];
+          data.cell.styles.fontStyle = 'bold';
+        }
+      }
+    },
+    didDrawPage: (data) => _pdfFooter(doc, data)
+  });
+  doc.save(`StockCount_Report_${from}_to_${to}.pdf`);
+  toast('Stock count PDF downloaded!', 'success');
+}
+
+function _pdfFooter(doc, data) {
+  const pageCount = doc.internal.getNumberOfPages();
+  const pageSize = doc.internal.pageSize;
+  const pageHeight = pageSize.height || pageSize.getHeight();
+  doc.setFontSize(8);
+  doc.setTextColor(120);
+  doc.text(`Page ${data.pageNumber} of ${pageCount}`, pageSize.width - 80, pageHeight - 20);
+  doc.text('SOS Property Inventory', 40, pageHeight - 20);
+  doc.setTextColor(0);
 }
 
 /* =================================================================
@@ -4123,6 +4573,10 @@ function renderRecordDeliveryModal() {
     <div class="modal-header">
       <h3>Record New Delivery</h3>
       <button class="modal-close" onclick="closeModal()">&times;</button>
+    </div>
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; padding:8px 10px; margin-bottom:10px; background:var(--bg); border:1px solid var(--border); border-radius:8px; font-size:0.8rem;">
+      <span style="color:var(--text-light);">Delivery date</span>
+      <span style="font-weight:600;">${new Date().toLocaleDateString('en-GB', {weekday:'short', day:'2-digit', month:'short', year:'numeric'})} &middot; ${new Date().toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit'})}</span>
     </div>
     <p style="font-size:0.8rem; color:var(--text-light); margin-bottom:10px; line-height:1.5;">
       Enter the quantity delivered for each item. The submission goes to ASM for approval, then the approved quantities are <b>added</b> to current stock.
