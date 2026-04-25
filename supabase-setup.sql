@@ -170,8 +170,8 @@ alter table public.transactions replica identity full;
 alter table public.stock_counts replica identity full;
 alter table public.deliveries replica identity full;
 
--- ============ DAILY 28-DAY PURGE (pg_cron) ============================
--- Runs every day at 03:00 UTC. Deletes transactions older than 28 days.
+-- ============ DAILY 56-DAY PURGE (pg_cron) ============================
+-- Runs every day at 03:00 UTC. Deletes transactions older than 56 days.
 -- Storage photos are cleaned up by the client on startup (orphan sweep).
 
 -- Remove any previous schedule with the same name, then schedule fresh:
@@ -184,7 +184,7 @@ end $$;
 select cron.schedule(
   'purge-old-transactions',
   '0 3 * * *',
-  $$ delete from public.transactions where created_at < now() - interval '28 days'; $$
+  $$ delete from public.transactions where created_at < now() - interval '56 days'; $$
 );
 
 -- ======================================================================

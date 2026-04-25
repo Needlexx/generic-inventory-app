@@ -1144,7 +1144,7 @@ select.form-control {
     <div id="reportTable"></div>
     <div style="margin-top:20px;">
       <h3 style="font-size:0.95rem; margin:12px 0 8px;">&#128230; Archive — Weekly Reports</h3>
-      <p style="font-size:0.75rem; color:var(--text-light); margin-bottom:8px;">Data is retained for 28 days. Download a weekly ZIP (Excel + photos) before it expires.</p>
+      <p style="font-size:0.75rem; color:var(--text-light); margin-bottom:8px;">Data is retained for 56 days. Download a weekly ZIP (Excel + photos) before it expires.</p>
       <div id="archiveList"></div>
     </div>
   </div>
@@ -1191,11 +1191,11 @@ select.form-control {
    ================================================================= */
 // App version — bump alongside sw.js CACHE_NAME so ASM can verify which build
 // their device is actually running (shown under the email in the user menu).
-window.APP_VERSION = 'v45';
+window.APP_VERSION = 'v46';
 const SUPABASE_URL  = 'https://nogrnsjnwypihjaeulef.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5vZ3Juc2pud3lwaWhqYWV1bGVmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY0MDg2MzQsImV4cCI6MjA5MTk4NDYzNH0.ZxwsWtzzKO_nUSMQpH-FpbA2-5nYH8Nu1IegcKcYjW8';
 const PHOTO_BUCKET  = 'inventory-photos';
-const RETENTION_DAYS = 28;
+const RETENTION_DAYS = 56;
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON, {
   auth: { persistSession: true, autoRefreshToken: true, storageKey: 'inv_auth' }
 });
