@@ -1020,6 +1020,11 @@ select.form-control {
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg>
           <span>Check for pending deliveries</span>
         </button>
+        <!-- Hotel switcher — only shown for the warehouse role (e.g. James) -->
+        <div class="user-menu-hotel-switch" id="userMenuHotelSwitch" style="display:none; padding:6px 14px 8px; border-top:1px solid var(--border); border-bottom:1px solid var(--border); margin:2px 0;">
+          <div style="font-size:0.65rem; font-weight:700; color:var(--text-light); text-transform:uppercase; letter-spacing:0.08em; margin-bottom:6px;">Active hotel</div>
+          <div id="userMenuHotelButtons" style="display:flex; flex-direction:column; gap:4px;"></div>
+        </div>
         <button class="user-menu-item" onclick="openChangePasswordModal(false)" role="menuitem">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
           <span>Change password</span>
@@ -1216,7 +1221,7 @@ select.form-control {
    ================================================================= */
 // App version — bump alongside sw.js CACHE_NAME so ASM can verify which build
 // their device is actually running (shown under the email in the user menu).
-window.APP_VERSION = 'v48';
+window.APP_VERSION = 'v49';
 const SUPABASE_URL  = 'https://nogrnsjnwypihjaeulef.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5vZ3Juc2pud3lwaWhqYWV1bGVmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY0MDg2MzQsImV4cCI6MjA5MTk4NDYzNH0.ZxwsWtzzKO_nUSMQpH-FpbA2-5nYH8Nu1IegcKcYjW8';
 const PHOTO_BUCKET  = 'inventory-photos';
@@ -1286,12 +1291,116 @@ function applyRoleUI() {
   if (checkDeliveriesBtn) checkDeliveriesBtn.style.display = asm ? '' : 'none';
   const recordDeliveryBtn = document.getElementById('recordDeliveryBtn');
   if (recordDeliveryBtn) recordDeliveryBtn.style.display = ''; // both roles can record
+
+  // Header label — show the active hotel name once we know it
+  const orgEl = document.getElementById('orgNameHeader');
+  if (orgEl) {
+    const name = (HOTEL && HOTEL.name) ? HOTEL.name : 'SOS Property';
+    orgEl.innerHTML = name + '<span class="header-sub">Inventory</span>';
+  }
+
+  // Hotel switcher (warehouse role only)
+  const hotelSwitch = document.getElementById('userMenuHotelSwitch');
+  const hotelButtons = document.getElementById('userMenuHotelButtons');
+  if (hotelSwitch && hotelButtons) {
+    if (isWarehouse() && ALL_HOTELS.length > 0) {
+      hotelSwitch.style.display = '';
+      hotelButtons.innerHTML = ALL_HOTELS.map(h => {
+        const active = HOTEL && HOTEL.id === h.id;
+        return `<button class="user-menu-item" onclick="switchHotel('${h.id}')" role="menuitem"
+          style="padding:8px 10px; border-radius:6px; ${active ? 'background:var(--primary); color:#fff; font-weight:700;' : ''}">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18M5 21V7l8-4 8 4v14M9 9v.01M9 12v.01M9 15v.01M9 18v.01"/></svg>
+          <span>${h.name}${active ? ' &middot; active' : ''}</span>
+        </button>`;
+      }).join('');
+    } else {
+      hotelSwitch.style.display = 'none';
+      hotelButtons.innerHTML = '';
+    }
+  }
 }
 
 /* =================================================================
    DATA LAYER
    ================================================================= */
-const KEYS = { items: 'inv_items', transactions: 'inv_transactions', settings: 'inv_settings', fridayReport: 'inv_friday_report', orphanSweep: 'inv_last_orphan_sweep' };
+const KEYS = { items: 'inv_items', transactions: 'inv_transactions', settings: 'inv_settings', fridayReport: 'inv_friday_report', orphanSweep: 'inv_last_orphan_sweep', activeHotel: 'inv_active_hotel' };
+
+/* =================================================================
+   MULTI-HOTEL STATE — populated after login from public.user_profiles
+   - HOTEL: { id, code, name } of the hotel currently being viewed
+   - USER_ROLE: 'staff' (locked to one hotel) | 'warehouse' (can switch)
+   - ALL_HOTELS: every hotel row, only loaded for warehouse role
+   ================================================================= */
+let HOTEL = null;
+let USER_ROLE = 'staff';
+let ALL_HOTELS = [];
+
+function getActiveHotelId() { return HOTEL && HOTEL.id ? HOTEL.id : ''; }
+function isWarehouse() { return USER_ROLE === 'warehouse'; }
+
+// After auth: read profile + hotel record(s). Throws if no profile exists yet.
+async function loadProfileAndHotel() {
+  if (!currentUser || !currentUser.id) throw new Error('No user session');
+  const { data: prof, error: e1 } = await sb
+    .from('user_profiles').select('role, hotel_id').eq('user_id', currentUser.id).single();
+  if (e1 || !prof) {
+    console.error('[hotel] profile fetch failed:', e1);
+    throw new Error('No profile found — ask the manager to set up your account.');
+  }
+  USER_ROLE = prof.role || 'staff';
+
+  if (USER_ROLE === 'warehouse') {
+    // Warehouse: load every hotel and pick the last-used one (or the first)
+    const { data: hots, error: e2 } = await sb.from('hotels').select('id, code, name').order('name');
+    if (e2) { console.warn('[hotel] hotels fetch failed:', e2); }
+    ALL_HOTELS = hots || [];
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(KEYS.activeHotel) || 'null'); } catch(_) {}
+    HOTEL = (saved && ALL_HOTELS.find(h => h.id === saved.id)) || ALL_HOTELS[0] || null;
+  } else {
+    // Staff: locked to their assigned hotel
+    if (!prof.hotel_id) throw new Error('Profile has no hotel assigned — contact the manager.');
+    const { data: hot, error: e3 } = await sb.from('hotels')
+      .select('id, code, name').eq('id', prof.hotel_id).single();
+    if (e3 || !hot) { console.warn('[hotel] hotel fetch failed:', e3); throw new Error('Hotel record missing.'); }
+    HOTEL = hot;
+  }
+  if (HOTEL) localStorage.setItem(KEYS.activeHotel, JSON.stringify(HOTEL));
+  console.log('[hotel] active:', HOTEL && HOTEL.code, '| role:', USER_ROLE);
+}
+
+// Wipe in-memory + localStorage caches that belong to a single hotel.
+// Used on logout AND when warehouse switches hotels.
+function clearLocalCache() {
+  try { localStorage.removeItem(KEYS.items); } catch(_) {}
+  try { localStorage.removeItem(KEYS.transactions); } catch(_) {}
+}
+
+// Warehouse-only: switch the active hotel, clear cache, re-pull, re-bind realtime.
+async function switchHotel(hotelId) {
+  if (!isWarehouse()) return;
+  const next = ALL_HOTELS.find(h => h.id === hotelId);
+  if (!next || (HOTEL && HOTEL.id === next.id)) { closeUserMenu(); return; }
+  HOTEL = next;
+  localStorage.setItem(KEYS.activeHotel, JSON.stringify(HOTEL));
+  closeUserMenu();
+  applyRoleUI();
+  try { unsubscribeRealtime(); } catch(_) {}
+  clearLocalCache();
+  showSyncStatus('syncing');
+  try {
+    await pullFromSupabase();
+    showSyncStatus('synced');
+  } catch(e) {
+    console.error('[hotel] switch pull failed:', e);
+    showSyncStatus('error');
+  }
+  refreshActiveTab();
+  try { subscribeToRealtime(); } catch(_) {}
+  try { refreshPendingSubmissionsBanner(); } catch(_) {}
+  try { refreshPendingDeliveriesBanner(); } catch(_) {}
+  toast('Switched to ' + HOTEL.name, 'success');
+}
 
 const CATEGORIES = ['Baby Food','Baby Formula','Baby Equipment','Baby Care','Nappies','Toiletries','Sanitary Products','Medical','Cleaning','Office Supplies','Technology','Tools','Consumables','Other'];
 const UNITS = ['pcs','jars','bottles','boxes','packs','tins','tubes','rolls','pairs','kg','litres','sheets','sets'];
@@ -2668,7 +2777,8 @@ async function deleteTransaction(id) {
         }
 
         // 4. Remove transaction row from Supabase
-        const { error } = await sb.from('transactions').delete().eq('id', id);
+        const { error } = await sb.from('transactions').delete()
+          .eq('id', id).eq('hotel_id', getActiveHotelId());
         if (error) throw error;
 
         // 5. Remove from local cache
@@ -2907,6 +3017,7 @@ async function fetchDeliveriesForRange(from, to) {
   const { data, error } = await sb
     .from('deliveries')
     .select('*')
+    .eq('hotel_id', getActiveHotelId())
     .eq('status', 'applied')
     .gte('submitted_at', fromIso)
     .lte('submitted_at', toIso)
@@ -2923,6 +3034,7 @@ async function fetchStockCountsForRange(from, to) {
   const { data, error } = await sb
     .from('stock_counts')
     .select('*')
+    .eq('hotel_id', getActiveHotelId())
     .eq('status', 'applied')
     .gte('submitted_at', fromIso)
     .lte('submitted_at', toIso)
@@ -3534,9 +3646,11 @@ async function doLogout() {
     try { unsubscribeRealtime(); } catch(e) {}
     try { stopPendingSubmissionsPoller(); } catch(e) {}
     await sb.auth.signOut();
-    // Clear local cache so next user doesn't see old data
-    localStorage.removeItem(KEYS.items);
-    localStorage.removeItem(KEYS.transactions);
+    // Clear local cache so next user doesn't see old data, and clear the
+    // active-hotel pointer so a different account on this device starts clean.
+    clearLocalCache();
+    try { localStorage.removeItem(KEYS.activeHotel); } catch(_) {}
+    HOTEL = null; USER_ROLE = 'staff'; ALL_HOTELS = [];
     currentUser = null;
     location.reload();
   });
@@ -3740,6 +3854,24 @@ async function doSendReset() {
 }
 
 async function afterAuthReady() {
+  // Load this user's profile + active hotel BEFORE any data pull.
+  // If the profile is missing, sign out so the user is forced to re-sign-in
+  // after the manager creates their profile row.
+  try {
+    await loadProfileAndHotel();
+  } catch(e) {
+    console.error('[hotel] loadProfileAndHotel failed:', e);
+    toast(e.message || 'Account not set up — contact the manager.', 'error', 6000);
+    try { await sb.auth.signOut(); } catch(_) {}
+    location.reload();
+    return;
+  }
+
+  // Different hotel than last cache? Wipe local caches so we don't briefly
+  // render the previous hotel's items/transactions.
+  // (afterAuthReady runs once per page load, so we always start fresh per session.)
+  clearLocalCache();
+
   applyRoleUI();
   showSyncStatus('syncing');
   try {
@@ -3766,11 +3898,11 @@ async function afterAuthReady() {
   try { refreshPendingDeliveriesBanner(); } catch(e) { console.warn('Pending deliveries banner refresh failed:', e); }
   // Polling fallback in case realtime isn't receiving stock_counts events
   try { startPendingSubmissionsPoller(); } catch(e) { console.warn('Pending poller start failed:', e); }
-  // Orphan photo sweep (once per 24h)
-  const lastSweep = parseInt(localStorage.getItem(KEYS.orphanSweep) || '0');
-  if (Date.now() - lastSweep > 86400000) {
-    sweepOrphanPhotos().catch(e => console.warn('Orphan sweep failed:', e));
-  }
+  // Orphan photo sweep DISABLED in v49: with per-hotel RLS the client only
+  // sees its own hotel's transactions, so a sweep would wrongly delete the
+  // OTHER hotel's photos from the shared bucket. The 56-day cron purge on the
+  // transactions table still runs server-side; storage cleanup will be moved
+  // to a service-role scheduled function later.
 }
 
 /* =================================================================
@@ -3778,9 +3910,11 @@ async function afterAuthReady() {
    ================================================================= */
 async function pullFromSupabase() {
   const since = new Date(Date.now() - RETENTION_DAYS * 86400000).toISOString();
+  const hid = getActiveHotelId();
+  if (!hid) { console.warn('[pull] no active hotel — skipping pull'); return; }
   const [itemsRes, txnRes] = await Promise.all([
-    sb.from('items').select('*').order('name'),
-    sb.from('transactions').select('*').gte('created_at', since).order('created_at', { ascending: false })
+    sb.from('items').select('*').eq('hotel_id', hid).order('name'),
+    sb.from('transactions').select('*').eq('hotel_id', hid).gte('created_at', since).order('created_at', { ascending: false })
   ]);
   if (itemsRes.error) throw itemsRes.error;
   if (txnRes.error) throw txnRes.error;
@@ -3801,7 +3935,8 @@ function rowFromItem(i) {
   return {
     id: i.id, name: i.name, category: i.category, quantity: i.quantity,
     unit: i.unit, min_stock: i.minStock, max_stock: i.maxStock,
-    product_code: i.productCode || null
+    product_code: i.productCode || null,
+    hotel_id: getActiveHotelId()
   };
 }
 
@@ -3814,7 +3949,7 @@ async function pushItem(item) {
 
 async function pushItemDelete(id) {
   showSyncStatus('syncing');
-  const { error } = await sb.from('items').delete().eq('id', id);
+  const { error } = await sb.from('items').delete().eq('id', id).eq('hotel_id', getActiveHotelId());
   if (error) { showSyncStatus('error'); return false; }
   showSyncStatus('synced'); return true;
 }
@@ -3829,7 +3964,8 @@ async function pushTransaction(txn) {
     items: txn.items,
     notes: txn.notes || null,
     photo_path: txn.photoPath || null,
-    created_at: txn.date
+    created_at: txn.date,
+    hotel_id: getActiveHotelId()
   });
   if (error) { showSyncStatus('error'); toast('Transaction sync failed: ' + error.message, 'error'); return false; }
   showSyncStatus('synced'); return true;
@@ -3846,6 +3982,7 @@ async function pullStockCountSubmissions() {
   const { data, error } = await sb
     .from('stock_counts')
     .select('*')
+    .eq('hotel_id', getActiveHotelId())
     .eq('status', 'pending')
     .order('submitted_at', { ascending: false });
   if (error) { console.warn('Pull pending stock counts failed:', error); return []; }
@@ -3854,7 +3991,8 @@ async function pullStockCountSubmissions() {
 
 // Fetch a single submission by id
 async function getStockCountSubmission(id) {
-  const { data, error } = await sb.from('stock_counts').select('*').eq('id', id).single();
+  const { data, error } = await sb.from('stock_counts').select('*')
+    .eq('id', id).eq('hotel_id', getActiveHotelId()).single();
   if (error) { console.warn('Get submission failed:', error); return null; }
   return data;
 }
@@ -3908,7 +4046,8 @@ async function submitCountToASM() {
       sumSystem: data.sumSystem,
       sumActual: data.sumActual
     },
-    status: 'pending'
+    status: 'pending',
+    hotel_id: getActiveHotelId()
   };
   showSyncStatus('syncing');
   console.log('[stock_counts] Submitting count with', payload.counts.length, 'items as', payload.submitted_by);
@@ -3957,6 +4096,7 @@ async function markSubmissionStatus(id, newStatus, extraFields) {
     .from('stock_counts')
     .update(payload)
     .eq('id', id)
+    .eq('hotel_id', getActiveHotelId())
     .select('*');
   if (error) {
     console.error(`[stock_counts] Mark ${newStatus} failed:`, error);
@@ -3974,6 +4114,7 @@ async function markSubmissionStatus(id, newStatus, extraFields) {
     .from('stock_counts')
     .select('id,status')
     .eq('id', id)
+    .eq('hotel_id', getActiveHotelId())
     .maybeSingle();
   if (checkErr) {
     console.error(`[stock_counts] Verification read failed:`, checkErr);
@@ -4396,6 +4537,7 @@ async function refreshPendingSubmissionsBanner() {
   const { data: all, error } = await sb
     .from('stock_counts')
     .select('id,status,submitted_by,submitted_at,applied_by,applied_at')
+    .eq('hotel_id', getActiveHotelId())
     .gte('submitted_at', sinceIso)
     .order('submitted_at', { ascending: false });
   const list = (all || []).filter(r => r.status === 'pending');
@@ -4660,7 +4802,8 @@ async function submitDeliveryToASM(notes) {
     items: lines,
     notes: notes || null,
     summary: { totalItems: lines.length, totalUnits },
-    status: 'pending'
+    status: 'pending',
+    hotel_id: getActiveHotelId()
   };
   showSyncStatus('syncing');
   console.log('[deliveries] Submitting delivery with', lines.length, 'items,', totalUnits, 'units as', payload.submitted_by);
@@ -4698,6 +4841,7 @@ async function pullDeliverySubmissions() {
   const { data, error } = await sb
     .from('deliveries')
     .select('*')
+    .eq('hotel_id', getActiveHotelId())
     .eq('status', 'pending')
     .order('submitted_at', { ascending: false });
   if (error) { console.warn('Pull pending deliveries failed:', error); return []; }
@@ -4705,7 +4849,8 @@ async function pullDeliverySubmissions() {
 }
 
 async function getDeliverySubmission(id) {
-  const { data, error } = await sb.from('deliveries').select('*').eq('id', id).single();
+  const { data, error } = await sb.from('deliveries').select('*')
+    .eq('id', id).eq('hotel_id', getActiveHotelId()).single();
   if (error) { console.warn('Get delivery failed:', error); return null; }
   return data;
 }
@@ -4722,6 +4867,7 @@ async function markDeliveryStatus(id, newStatus, extraFields) {
     .from('deliveries')
     .update(payload)
     .eq('id', id)
+    .eq('hotel_id', getActiveHotelId())
     .select('*');
   if (error) {
     console.error(`[deliveries] Mark ${newStatus} failed:`, error);
@@ -4731,7 +4877,7 @@ async function markDeliveryStatus(id, newStatus, extraFields) {
   if (data && data.length) return true;
   console.warn(`[deliveries] Mark ${newStatus} returned no rows — verifying via read-back`);
   const { data: check, error: checkErr } = await sb
-    .from('deliveries').select('id,status').eq('id', id).maybeSingle();
+    .from('deliveries').select('id,status').eq('id', id).eq('hotel_id', getActiveHotelId()).maybeSingle();
   if (checkErr) {
     toast(`Could not verify ${newStatus}: ` + (checkErr.message || 'database error'), 'error');
     return false;
@@ -5087,15 +5233,19 @@ function subscribeToRealtime() {
   // Clean up any existing subscriptions first
   unsubscribeRealtime();
 
-  const itemsCh = sb.channel('realtime-items')
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'items' }, handleItemsChange)
+  const hid = getActiveHotelId();
+  if (!hid) { console.warn('[Realtime] no active hotel — skipping subscribe'); return; }
+  const filter = 'hotel_id=eq.' + hid;
+
+  const itemsCh = sb.channel('realtime-items-' + hid)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'items', filter }, handleItemsChange)
     .subscribe((status) => {
-      if (status === 'SUBSCRIBED') console.log('[Realtime] items channel ready');
+      if (status === 'SUBSCRIBED') console.log('[Realtime] items channel ready (' + hid + ')');
       if (status === 'CHANNEL_ERROR') console.warn('[Realtime] items channel error');
     });
 
-  const txnCh = sb.channel('realtime-txns')
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, handleTxnChange)
+  const txnCh = sb.channel('realtime-txns-' + hid)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions', filter }, handleTxnChange)
     .subscribe((status) => {
       if (status === 'SUBSCRIBED') console.log('[Realtime] transactions channel ready');
       if (status === 'CHANNEL_ERROR') console.warn('[Realtime] transactions channel error');
@@ -5103,16 +5253,16 @@ function subscribeToRealtime() {
 
   // Stock count submissions — ASM sees new Welfare submissions instantly,
   // and Welfare devices see a submission leave the queue when ASM applies/dismisses it.
-  const stockCountCh = sb.channel('realtime-stock-counts')
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'stock_counts' }, handleStockCountChange)
+  const stockCountCh = sb.channel('realtime-stock-counts-' + hid)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'stock_counts', filter }, handleStockCountChange)
     .subscribe((status) => {
       if (status === 'SUBSCRIBED') console.log('[Realtime] stock_counts channel ready');
       if (status === 'CHANNEL_ERROR') console.warn('[Realtime] stock_counts channel error');
     });
 
   // Delivery submissions — ASM sees new Welfare deliveries instantly.
-  const deliveriesCh = sb.channel('realtime-deliveries')
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'deliveries' }, handleDeliveryChange)
+  const deliveriesCh = sb.channel('realtime-deliveries-' + hid)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'deliveries', filter }, handleDeliveryChange)
     .subscribe((status) => {
       if (status === 'SUBSCRIBED') console.log('[Realtime] deliveries channel ready');
       if (status === 'CHANNEL_ERROR') console.warn('[Realtime] deliveries channel error');
@@ -5333,6 +5483,7 @@ async function downloadWeeklyArchive(fromIso, toIso) {
   toast('Building report... this may take a moment', 'warning');
   try {
     const { data: txns, error } = await sb.from('transactions').select('*')
+      .eq('hotel_id', getActiveHotelId())
       .gte('created_at', fromIso).lte('created_at', toIso)
       .order('created_at', { ascending: false });
     if (error) throw error;
