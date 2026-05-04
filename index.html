@@ -1221,7 +1221,7 @@ select.form-control {
    ================================================================= */
 // App version — bump alongside sw.js CACHE_NAME so ASM can verify which build
 // their device is actually running (shown under the email in the user menu).
-window.APP_VERSION = 'v49';
+window.APP_VERSION = 'v50';
 const SUPABASE_URL  = 'https://nogrnsjnwypihjaeulef.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5vZ3Juc2pud3lwaWhqYWV1bGVmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY0MDg2MzQsImV4cCI6MjA5MTk4NDYzNH0.ZxwsWtzzKO_nUSMQpH-FpbA2-5nYH8Nu1IegcKcYjW8';
 const PHOTO_BUCKET  = 'inventory-photos';
@@ -1256,13 +1256,21 @@ sb.auth.onAuthStateChange((event, session) => {
    Any email containing "asm" or "manager" also counts as ASM.
    ================================================================= */
 const ASM_EMAILS = [
-  'hiwembleyasm@sosproperty.co.uk'
+  'hiwembleyasm@sosproperty.co.uk',
+  'bwwembleyasm@sosproperty.co.uk'
 ];
 function isASM() {
   if (!currentUser) return false;
   const email = (currentUser.email || '').toLowerCase();
   if (ASM_EMAILS.includes(email)) return true;
-  return /(^|[._-])(asm|manager)([-._@]|$)/.test(email);
+  const local = email.split('@')[0] || '';
+  // Treat any email whose local part ends with "asm" or "manager" as a manager,
+  // so future <hotel>asm@... accounts work without code changes.
+  // 'sm' (site manager) only matches when preceded by a separator, otherwise
+  // it would also match the 'sm' inside 'asm'.
+  if (/asm$|manager$/.test(local)) return true;
+  if (/(^|[._-])(asm|manager|sm)([._-]|$)/.test(local)) return true;
+  return false;
 }
 function requireASM(msg) {
   if (isASM()) return true;
