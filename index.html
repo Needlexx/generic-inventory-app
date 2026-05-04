@@ -1250,7 +1250,7 @@ select.form-control {
    ================================================================= */
 // App version — bump alongside sw.js CACHE_NAME so ASM can verify which build
 // their device is actually running (shown under the email in the user menu).
-window.APP_VERSION = 'v54';
+window.APP_VERSION = 'v55';
 const SUPABASE_URL  = 'https://nogrnsjnwypihjaeulef.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5vZ3Juc2pud3lwaWhqYWV1bGVmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY0MDg2MzQsImV4cCI6MjA5MTk4NDYzNH0.ZxwsWtzzKO_nUSMQpH-FpbA2-5nYH8Nu1IegcKcYjW8';
 const PHOTO_BUCKET  = 'inventory-photos';
@@ -5690,7 +5690,8 @@ async function confirmSendToSite() {
   // 2. Create a pending delivery for the target hotel
   //    (Hotel ASM approves → their item quantities increase via existing approval flow)
   const deliveryLines = lines.map(l => ({
-    id: l.item.id,
+    id: l.item.id,                          // warehouse UUID (used as hint; hotel will re-match)
+    product_code: l.item.product_code || '', // key for cross-hotel matching
     name: l.item.name,
     category: l.item.category || '',
     unit: l.item.unit || '',
@@ -5984,16 +5985,26 @@ async function applyDeliverySubmission(id) {
     const allItems = getItems();
     const affected = [];
     lines.forEach(l => {
-      const idx = allItems.findIndex(x => x.id === l.id);
+      // Primary match: same hotel item id (regular hotel→hotel deliveries)
+      let idx = allItems.findIndex(x => x.id === l.id);
+      // Fallback 1: match by product_code (warehouse→site, items have same code but different UUIDs)
+      if (idx < 0 && l.product_code) {
+        idx = allItems.findIndex(x => x.product_code && x.product_code.trim().toLowerCase() === l.product_code.trim().toLowerCase());
+      }
+      // Fallback 2: match by name (normalised, case-insensitive)
+      if (idx < 0 && l.name) {
+        const norm = s => (s || '').trim().toLowerCase();
+        idx = allItems.findIndex(x => norm(x.name) === norm(l.name));
+      }
       if (idx < 0) {
-        console.warn('[deliveries] Item not found locally — skipped:', l.id, l.name);
+        console.warn('[deliveries] Item not found locally — skipped:', l.id, l.product_code, l.name);
         return;
       }
       const before = Number(allItems[idx].quantity) || 0;
       const add = Number(l.qty) || 0;
       if (add <= 0) return;
       const after = before + add;
-      affected.push({ id: l.id, name: allItems[idx].name, from: before, add, to: after });
+      affected.push({ id: allItems[idx].id, name: allItems[idx].name, from: before, add, to: after });
       allItems[idx].quantity = after;
     });
     console.log(`[deliveries] Apply: ${affected.length} of ${lines.length} lines will change`, affected);
