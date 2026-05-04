@@ -1250,7 +1250,7 @@ select.form-control {
    ================================================================= */
 // App version — bump alongside sw.js CACHE_NAME so ASM can verify which build
 // their device is actually running (shown under the email in the user menu).
-window.APP_VERSION = 'v52';
+window.APP_VERSION = 'v54';
 const SUPABASE_URL  = 'https://nogrnsjnwypihjaeulef.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5vZ3Juc2pud3lwaWhqYWV1bGVmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY0MDg2MzQsImV4cCI6MjA5MTk4NDYzNH0.ZxwsWtzzKO_nUSMQpH-FpbA2-5nYH8Nu1IegcKcYjW8';
 const PHOTO_BUCKET  = 'inventory-photos';
@@ -5344,80 +5344,387 @@ function downloadLowStockPDF() {
 
 /* ---------- Warehouse view: James's central inventory ---------- */
 
+/* ------------------------------------------------------------------
+   WAREHOUSE OWN VIEW
+   Uses the `items` table filtered by the WAREHOUSE hotel entry.
+   Stock arrives via "Receive from Supplier" → increases qty.
+   Stock leaves via "Send to Site"  → decreases qty + creates a
+   pending delivery for the target hotel.
+   ------------------------------------------------------------------ */
+
+function getWarehouseHotelId() {
+  const wh = ALL_HOTELS.find(h => h.code === 'WAREHOUSE');
+  return wh ? wh.id : null;
+}
+
 async function loadWarehouseOwnView() {
   const body = document.getElementById('warehouseStockBody');
   if (!body) return;
   body.innerHTML = '<div class="card" style="text-align:center; padding:24px; color:var(--text-light);"><span class="spinner" style="margin-right:8px;"></span> Loading warehouse stock…</div>';
+  const whId = getWarehouseHotelId();
+  if (!whId) {
+    body.innerHTML = '<div class="card" style="color:var(--danger); padding:16px;">Warehouse hotel not found. Run <b>import-warehouse-products.sql</b> in the Supabase SQL Editor first.</div>';
+    return;
+  }
   try {
-    const { data, error } = await sb.from('warehouse_items').select('*').order('name');
+    const { data, error } = await sb.from('items').select('*').eq('hotel_id', whId).order('category').order('name');
     if (error) throw error;
     warehouseOwnItems.items = data || [];
     renderWarehouseOwnView();
   } catch(e) {
     console.error('[warehouse] own load failed:', e);
-    const msg = e.message || 'Could not load.';
-    if (/relation .* does not exist/i.test(msg)) {
-      body.innerHTML = `<div class="card" style="color:var(--danger); padding:16px;">
-        Warehouse table not set up yet. Run <b>add-warehouse-stock-migration.sql</b> in the Supabase SQL Editor first.
-      </div>`;
-    } else {
-      body.innerHTML = `<div class="card" style="color:var(--danger); padding:16px;">Could not load: ${esc(msg)}</div>`;
-    }
+    body.innerHTML = `<div class="card" style="color:var(--danger); padding:16px;">Could not load: ${esc(e.message || 'unknown error')}</div>`;
   }
 }
+
+let whSearchTerm = '';
 
 function renderWarehouseOwnView() {
   const body = document.getElementById('warehouseStockBody');
   if (!body) return;
-  const items = warehouseOwnItems.items || [];
-  const totalUnits = items.reduce((s, i) => s + (Number(i.quantity) || 0), 0);
-  const lowCount = items.filter(i => (Number(i.quantity) || 0) <= (Number(i.min_stock) || 0)).length;
-
-  const list = items.length ? items.map(i => {
+  const allItems = warehouseOwnItems.items || [];
+  const totalUnits = allItems.reduce((s, i) => s + (Number(i.quantity) || 0), 0);
+  const lowCount = allItems.filter(i => {
     const qty = Number(i.quantity) || 0;
     const min = Number(i.min_stock) || 0;
-    const isLow = qty <= min;
-    return `
-      <div style="display:grid; grid-template-columns: 1fr auto auto; gap:8px; align-items:center; padding:10px 12px; border-bottom:1px solid var(--border);">
-        <div style="min-width:0;">
-          <div style="font-weight:600; font-size:0.88rem;">${esc(i.name)}</div>
-          <div style="font-size:0.72rem; color:var(--text-light);">
-            ${esc(i.category || '')} · ${isLow ? '<span style="color:#f59e0b; font-weight:700;">LOW</span> · ' : ''}min ${min} ${esc(i.unit || '')}
+    return min > 0 && qty <= min;
+  }).length;
+  const outCount = allItems.filter(i => (Number(i.quantity) || 0) <= 0).length;
+
+  // Apply search
+  const q = whSearchTerm.toLowerCase();
+  const items = q ? allItems.filter(i =>
+    (i.name || '').toLowerCase().includes(q) ||
+    (i.category || '').toLowerCase().includes(q) ||
+    (i.product_code || '').toLowerCase().includes(q)
+  ) : allItems;
+
+  // Group by category for display
+  const byCategory = {};
+  items.forEach(i => {
+    const cat = i.category || 'Other';
+    if (!byCategory[cat]) byCategory[cat] = [];
+    byCategory[cat].push(i);
+  });
+
+  const categoryBlocks = Object.keys(byCategory).sort().map(cat => {
+    const rows = byCategory[cat].map(i => {
+      const qty = Number(i.quantity) || 0;
+      const min = Number(i.min_stock) || 0;
+      const isOut = qty <= 0;
+      const isLow = !isOut && min > 0 && qty <= min;
+      const dot = isOut ? '#dc2626' : isLow ? '#f59e0b' : '#16a34a';
+      const badge = isOut
+        ? `<span style="font-size:0.62rem; font-weight:800; color:#dc2626; letter-spacing:0.05em; background:#fee2e2; padding:1px 5px; border-radius:4px; margin-left:4px;">OUT</span>`
+        : isLow
+          ? `<span style="font-size:0.62rem; font-weight:800; color:#b45309; letter-spacing:0.05em; background:#fef3c7; padding:1px 5px; border-radius:4px; margin-left:4px;">LOW</span>`
+          : '';
+      return `
+        <div style="display:grid; grid-template-columns: 8px 1fr auto auto; gap:8px; align-items:center; padding:9px 12px; border-bottom:1px solid var(--border);">
+          <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:${dot}; flex-shrink:0;"></span>
+          <div style="min-width:0;">
+            <div style="font-weight:600; font-size:0.85rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+              ${esc(i.name)}${badge}
+            </div>
+            <div style="font-size:0.7rem; color:var(--text-light);">${esc(i.product_code || '')}${i.product_code ? ' · ' : ''}${esc(i.unit || '')}</div>
           </div>
-        </div>
-        <input type="number" inputmode="numeric" min="0" step="1" value="${qty}"
-          onchange="updateWarehouseItemQty('${i.id}', this.value)"
-          style="width:74px; padding:6px 8px; text-align:right; border:1px solid var(--border); border-radius:6px; font-size:0.88rem;">
-        <button class="btn btn-outline" onclick="openEditWarehouseItem('${i.id}')" style="padding:6px 10px; font-size:0.78rem;">Edit</button>
-      </div>`;
-  }).join('') : '<div style="padding:30px; text-align:center; color:var(--text-light);">No warehouse items yet. Tap <b>Add item</b> to start.</div>';
+          <div style="text-align:right; font-weight:700; font-size:0.95rem; color:${isOut ? '#dc2626' : isLow ? '#b45309' : 'inherit'}; min-width:42px;">${qty}</div>
+          <button class="btn btn-outline" onclick="openEditWarehouseItem('${i.id}')" style="padding:5px 9px; font-size:0.75rem;">Edit</button>
+        </div>`;
+    }).join('');
+    return `
+      <div style="padding:6px 12px; background:var(--bg); font-size:0.72rem; font-weight:700; color:var(--text-light); text-transform:uppercase; letter-spacing:0.07em; border-bottom:1px solid var(--border);">${esc(cat)}</div>
+      ${rows}`;
+  }).join('');
+
+  const emptyMsg = q
+    ? `<div style="padding:30px; text-align:center; color:var(--text-light);">No items match "<b>${esc(q)}</b>"</div>`
+    : '<div style="padding:30px; text-align:center; color:var(--text-light);">No warehouse items found. Run the import SQL first.</div>';
 
   body.innerHTML = `
     <div class="stats-grid" style="margin-bottom:10px;">
-      <div class="stat-card"><div class="stat-value">${items.length}</div><div class="stat-label">Products</div></div>
-      <div class="stat-card"><div class="stat-value">${totalUnits}</div><div class="stat-label">Units in warehouse</div></div>
-      <div class="stat-card" style="${lowCount > 0 ? 'border-color:#f59e0b;' : ''}"><div class="stat-value" style="color:${lowCount > 0 ? '#f59e0b' : 'inherit'};">${lowCount}</div><div class="stat-label">Low stock</div></div>
+      <div class="stat-card"><div class="stat-value">${allItems.length}</div><div class="stat-label">Products</div></div>
+      <div class="stat-card"><div class="stat-value">${totalUnits.toLocaleString()}</div><div class="stat-label">Total units</div></div>
+      <div class="stat-card" style="${outCount > 0 ? 'border-color:#dc2626;' : lowCount > 0 ? 'border-color:#f59e0b;' : ''}">
+        <div class="stat-value" style="color:${outCount > 0 ? '#dc2626' : lowCount > 0 ? '#f59e0b' : 'inherit'};">${outCount > 0 ? outCount + ' out' : lowCount}</div>
+        <div class="stat-label">${outCount > 0 ? 'Out of stock' : 'Low stock'}</div>
+      </div>
     </div>
-    <button class="btn btn-primary btn-block" onclick="openAddWarehouseItem()" style="margin-bottom:10px;">+ Add item to warehouse</button>
-    <div class="card" style="padding:0; overflow:hidden;">${list}</div>`;
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:10px;">
+      <button class="btn btn-primary" onclick="openReceiveFromSupplierModal()" style="padding:11px 6px; font-size:0.82rem;">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="vertical-align:middle; margin-right:4px;"><path d="M12 5v14M5 12l7-7 7 7"/></svg>
+        Receive from Supplier
+      </button>
+      <button class="btn btn-success" onclick="openSendToSiteModal()" style="padding:11px 6px; font-size:0.82rem;">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="vertical-align:middle; margin-right:4px;"><path d="M22 2L11 13M22 2L15 22l-4-9-9-4 19-7z"/></svg>
+        Send to Site
+      </button>
+    </div>
+    <div style="display:flex; gap:8px; margin-bottom:10px;">
+      <input class="form-control" id="whSearchInput" type="search" placeholder="Search products…"
+        value="${esc(whSearchTerm)}" oninput="whSearchTerm=this.value; renderWarehouseOwnView();"
+        style="flex:1; padding:9px 12px;">
+      <button class="btn btn-outline" onclick="openAddWarehouseItem()" style="padding:9px 14px; white-space:nowrap;">+ Add</button>
+    </div>
+    <div class="card" style="padding:0; overflow:hidden;">
+      ${items.length ? categoryBlocks : emptyMsg}
+    </div>`;
 }
 
-async function updateWarehouseItemQty(id, val) {
-  const n = Math.max(0, parseInt(val, 10) || 0);
+/* ---------- Receive from Supplier ---------- */
+
+function openReceiveFromSupplierModal() {
+  const items = warehouseOwnItems.items || [];
+  if (!items.length) { toast('No warehouse items loaded', 'warning'); return; }
+  const rows = items.map(i => `
+    <div style="display:grid; grid-template-columns:1fr auto; gap:8px; align-items:center; padding:8px 0; border-bottom:1px solid var(--border);">
+      <div>
+        <div style="font-weight:600; font-size:0.85rem;">${esc(i.name)}</div>
+        <div style="font-size:0.7rem; color:var(--text-light);">${esc(i.category || '')} · current: <b>${Number(i.quantity)||0}</b> ${esc(i.unit||'')}</div>
+      </div>
+      <input type="number" inputmode="numeric" min="0" step="1" value="0"
+        id="recv_${i.id}"
+        style="width:72px; padding:6px 8px; text-align:right; border:1px solid var(--border); border-radius:6px; font-size:0.88rem;"
+        placeholder="0">
+    </div>`).join('');
+  openModal(`
+    <div class="modal-header">
+      <h3>Receive from Supplier</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button>
+    </div>
+    <p style="font-size:0.82rem; color:var(--text-light); margin-bottom:12px;">Enter the quantity received for each item. Leave at 0 to skip.</p>
+    <div class="form-group">
+      <input class="form-control" type="search" placeholder="Search items…"
+        oninput="filterReceiveRows(this.value)"
+        style="margin-bottom:8px;">
+    </div>
+    <div id="receiveRowsContainer" style="max-height:52vh; overflow-y:auto; margin-bottom:12px;">${rows}</div>
+    <div class="form-group">
+      <label class="form-label">Supplier / Notes (optional)</label>
+      <input class="form-control" id="recvSupplierNotes" placeholder="e.g. Nisbets delivery 04/05/2026">
+    </div>
+    <button class="btn btn-primary btn-block" onclick="confirmReceiveFromSupplier()">Add to Warehouse Stock</button>
+  `);
+}
+
+function filterReceiveRows(q) {
+  const rows = document.querySelectorAll('#receiveRowsContainer > div');
+  const term = (q || '').toLowerCase();
+  rows.forEach(row => {
+    const text = row.textContent.toLowerCase();
+    row.style.display = (!term || text.includes(term)) ? '' : 'none';
+  });
+}
+
+async function confirmReceiveFromSupplier() {
+  const items = warehouseOwnItems.items || [];
+  const lines = items.map(i => {
+    const input = document.getElementById('recv_' + i.id);
+    const qty = Math.max(0, parseInt(input ? input.value : '0', 10) || 0);
+    return qty > 0 ? { item: i, qty } : null;
+  }).filter(Boolean);
+
+  if (!lines.length) { toast('Enter at least one quantity', 'warning'); return; }
+
+  const notes = (document.getElementById('recvSupplierNotes')?.value || '').trim();
   showSyncStatus('syncing');
-  const { error } = await sb.from('warehouse_items').update({ quantity: n }).eq('id', id);
-  if (error) {
-    showSyncStatus('error');
-    toast('Could not update: ' + (error.message || ''), 'error');
-    return;
+  closeModal();
+
+  let failed = 0;
+  for (const { item, qty } of lines) {
+    const newQty = (Number(item.quantity) || 0) + qty;
+    const { error } = await sb.from('items').update({ quantity: newQty }).eq('id', item.id);
+    if (error) { failed++; console.error('[recv]', error); }
+    else {
+      // Log to transactions
+      await sb.from('transactions').insert({
+        item_id: item.id,
+        item_name: item.name,
+        category: item.category || '',
+        quantity: qty,
+        type: 'received',
+        notes: notes || 'Received from supplier',
+        issued_by: (currentUser && currentUser.email) || 'warehouse',
+        hotel_id: getWarehouseHotelId()
+      });
+      // Update local cache
+      const cached = warehouseOwnItems.items.find(x => x.id === item.id);
+      if (cached) cached.quantity = newQty;
+    }
   }
-  showSyncStatus('synced');
-  // Update local cache so the row reflects without a full reload
-  const it = warehouseOwnItems.items.find(x => x.id === id);
-  if (it) it.quantity = n;
-  // Re-render to update LOW marker if min_stock crossed
+
+  if (failed > 0) {
+    showSyncStatus('error');
+    toast(`${failed} item(s) failed to update`, 'error');
+  } else {
+    showSyncStatus('synced');
+    toast(`Stock received: ${lines.length} product${lines.length !== 1 ? 's' : ''} updated`, 'success');
+  }
   renderWarehouseOwnView();
 }
+
+/* ---------- Send to Site ---------- */
+
+let sendToSiteDraft = {};   // { itemId: { qty, checked } }
+let sendToSiteHotelId = null;
+
+function openSendToSiteModal() {
+  const siteHotels = ALL_HOTELS.filter(h => h.code !== 'WAREHOUSE');
+  if (!siteHotels.length) { toast('No sites configured', 'warning'); return; }
+  const hotelOpts = siteHotels.map(h =>
+    `<option value="${esc(h.id)}">${esc(h.name)}</option>`
+  ).join('');
+  const items = warehouseOwnItems.items || [];
+  if (!items.length) { toast('No warehouse stock loaded', 'warning'); return; }
+
+  sendToSiteDraft = {};
+  sendToSiteHotelId = siteHotels[0].id;
+
+  const rows = items.map(i => {
+    const qty = Number(i.quantity) || 0;
+    const key = i.id;
+    return `
+      <div id="sts_row_${key}" style="display:grid; grid-template-columns:22px 1fr auto; gap:8px; align-items:center; padding:8px 12px; border-bottom:1px solid var(--border);">
+        <input type="checkbox" id="sts_chk_${key}" onchange="stsDraftToggle('${key}', this.checked)"
+          style="width:18px; height:18px; accent-color:var(--primary);">
+        <div style="min-width:0;">
+          <div style="font-weight:600; font-size:0.85rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(i.name)}</div>
+          <div style="font-size:0.7rem; color:var(--text-light);">${esc(i.category||'')} · warehouse: <b>${qty}</b> ${esc(i.unit||'')}</div>
+        </div>
+        <input type="number" inputmode="numeric" min="0" max="${qty}" step="1" value="0"
+          id="sts_qty_${key}"
+          onchange="stsDraftQty('${key}', this.value, ${qty})"
+          style="width:68px; padding:6px 8px; text-align:right; border:1px solid var(--border); border-radius:6px; font-size:0.88rem;">
+      </div>`;
+  }).join('');
+
+  openModal(`
+    <div class="modal-header">
+      <h3>Send Stock to Site</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Destination site</label>
+      <select class="form-control" id="stsSiteSelect" onchange="sendToSiteHotelId=this.value">${hotelOpts}</select>
+    </div>
+    <div class="form-group">
+      <input class="form-control" type="search" placeholder="Search items…"
+        oninput="filterSendToSiteRows(this.value)" style="margin-bottom:0;">
+    </div>
+    <div id="stsRowsContainer" style="max-height:46vh; overflow-y:auto; margin-bottom:12px;">${rows}</div>
+    <div class="form-group">
+      <label class="form-label">Notes (optional)</label>
+      <input class="form-control" id="stsNotes" placeholder="e.g. Weekly replenishment">
+    </div>
+    <button class="btn btn-success btn-block" onclick="confirmSendToSite()">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="vertical-align:middle; margin-right:4px;"><path d="M22 2L11 13M22 2L15 22l-4-9-9-4 19-7z"/></svg>
+      Confirm & Send
+    </button>
+  `);
+}
+
+function filterSendToSiteRows(q) {
+  const rows = document.querySelectorAll('#stsRowsContainer > div');
+  const term = (q || '').toLowerCase();
+  rows.forEach(row => {
+    row.style.display = (!term || row.textContent.toLowerCase().includes(term)) ? '' : 'none';
+  });
+}
+
+function stsDraftToggle(id, checked) {
+  if (!sendToSiteDraft[id]) sendToSiteDraft[id] = { qty: 0, checked: false };
+  sendToSiteDraft[id].checked = checked;
+  if (!checked) sendToSiteDraft[id].qty = 0;
+}
+
+function stsDraftQty(id, val, max) {
+  const n = Math.min(max, Math.max(0, parseInt(val, 10) || 0));
+  if (!sendToSiteDraft[id]) sendToSiteDraft[id] = { qty: 0, checked: false };
+  sendToSiteDraft[id].qty = n;
+  if (n > 0) {
+    sendToSiteDraft[id].checked = true;
+    const cb = document.getElementById('sts_chk_' + id);
+    if (cb) cb.checked = true;
+  }
+}
+
+async function confirmSendToSite() {
+  const targetHotelId = sendToSiteHotelId || document.getElementById('stsSiteSelect')?.value;
+  const targetHotel = ALL_HOTELS.find(h => h.id === targetHotelId);
+  if (!targetHotel) { toast('Select a destination site', 'warning'); return; }
+
+  const items = warehouseOwnItems.items || [];
+  const lines = items.map(i => {
+    const d = sendToSiteDraft[i.id];
+    const qty = d ? d.qty : 0;
+    return qty > 0 ? { item: i, qty } : null;
+  }).filter(Boolean);
+
+  if (!lines.length) { toast('Tick at least one item and enter a quantity', 'warning'); return; }
+
+  // Check we're not sending more than we have
+  const overstock = lines.filter(l => l.qty > (Number(l.item.quantity) || 0));
+  if (overstock.length) {
+    toast(`Not enough stock: ${overstock.map(l => l.item.name).join(', ')}`, 'error');
+    return;
+  }
+
+  const notes = (document.getElementById('stsNotes')?.value || '').trim();
+  showSyncStatus('syncing');
+  closeModal();
+
+  const totalUnits = lines.reduce((s, l) => s + l.qty, 0);
+
+  // 1. Deduct from warehouse immediately
+  let failed = 0;
+  for (const { item, qty } of lines) {
+    const newQty = Math.max(0, (Number(item.quantity) || 0) - qty);
+    const { error } = await sb.from('items').update({ quantity: newQty }).eq('id', item.id);
+    if (error) { failed++; console.error('[send-to-site deduct]', error); }
+    else {
+      const cached = warehouseOwnItems.items.find(x => x.id === item.id);
+      if (cached) cached.quantity = newQty;
+    }
+  }
+
+  // 2. Create a pending delivery for the target hotel
+  //    (Hotel ASM approves → their item quantities increase via existing approval flow)
+  const deliveryLines = lines.map(l => ({
+    id: l.item.id,
+    name: l.item.name,
+    category: l.item.category || '',
+    unit: l.item.unit || '',
+    qty: l.qty
+  }));
+
+  const payload = {
+    submitted_by: (currentUser && currentUser.email) || 'warehouse',
+    items: deliveryLines,
+    notes: notes || `Warehouse dispatch to ${targetHotel.name}`,
+    summary: { totalItems: lines.length, totalUnits },
+    status: 'pending',
+    hotel_id: targetHotelId
+  };
+
+  const { error: e2 } = await sb.from('deliveries').insert(payload);
+  if (e2) {
+    console.error('[send-to-site delivery]', e2);
+    showSyncStatus('error');
+    toast('Delivery record failed: ' + (e2.message || ''), 'error');
+    return;
+  }
+
+  if (failed > 0) {
+    showSyncStatus('error');
+    toast(`Sent but ${failed} warehouse deduction(s) failed — reload to check`, 'warning');
+  } else {
+    showSyncStatus('synced');
+    toast(`Sent ${lines.length} product${lines.length !== 1 ? 's' : ''} (${totalUnits} units) to ${targetHotel.name}`, 'success');
+  }
+  renderWarehouseOwnView();
+}
+
+/* ---------- Add / Edit warehouse item ---------- */
 
 function openAddWarehouseItem() {
   openWarehouseItemModal(null);
@@ -5439,7 +5746,7 @@ function openWarehouseItemModal(existing) {
   ).join('');
   openModal(`
     <div class="modal-header">
-      <h3>${isEdit ? 'Edit warehouse item' : 'Add warehouse item'}</h3>
+      <h3>${isEdit ? 'Edit warehouse item' : 'Add item to warehouse'}</h3>
       <button class="modal-close" onclick="closeModal()">&times;</button>
     </div>
     <div class="form-group">
@@ -5461,8 +5768,8 @@ function openWarehouseItemModal(existing) {
       </div>
     </div>
     <div class="form-group">
-      <label class="form-label">Min stock</label>
-      <input class="form-control" type="number" inputmode="numeric" min="0" id="whItemMin" value="${existing ? existing.min_stock : 5}">
+      <label class="form-label">Min stock (alert threshold)</label>
+      <input class="form-control" type="number" inputmode="numeric" min="0" id="whItemMin" value="${existing ? (existing.min_stock || 0) : 0}">
     </div>
     <div class="form-group">
       <label class="form-label">Product code (optional)</label>
@@ -5483,15 +5790,17 @@ async function saveWarehouseItem(id) {
   const min_stock = Math.max(0, parseInt(document.getElementById('whItemMin').value, 10) || 0);
   const product_code = (document.getElementById('whItemCode').value || '').trim() || null;
   if (!name) { toast('Name is required', 'warning'); return; }
+  const whId = getWarehouseHotelId();
+  if (!whId) { toast('Warehouse hotel not configured', 'error'); return; }
   showSyncStatus('syncing');
   if (id) {
-    const { error } = await sb.from('warehouse_items')
+    const { error } = await sb.from('items')
       .update({ name, category, quantity, unit, min_stock, product_code })
-      .eq('id', id);
+      .eq('id', id).eq('hotel_id', whId);
     if (error) { showSyncStatus('error'); toast('Save failed: ' + error.message, 'error'); return; }
   } else {
-    const { error } = await sb.from('warehouse_items')
-      .insert({ name, category, quantity, unit, min_stock, product_code });
+    const { error } = await sb.from('items')
+      .insert({ name, category, quantity, unit, min_stock, product_code, hotel_id: whId });
     if (error) { showSyncStatus('error'); toast('Save failed: ' + error.message, 'error'); return; }
   }
   showSyncStatus('synced');
@@ -5501,9 +5810,10 @@ async function saveWarehouseItem(id) {
 }
 
 async function deleteWarehouseItem(id) {
-  showConfirm('Delete warehouse item?', 'This removes the item from your warehouse list. It does NOT affect any hotel\'s stock.', async () => {
+  showConfirm('Delete warehouse item?', 'This removes the item from your warehouse list only. No hotel stock is affected.', async () => {
+    const whId = getWarehouseHotelId();
     showSyncStatus('syncing');
-    const { error } = await sb.from('warehouse_items').delete().eq('id', id);
+    const { error } = await sb.from('items').delete().eq('id', id).eq('hotel_id', whId);
     if (error) { showSyncStatus('error'); toast('Delete failed: ' + error.message, 'error'); return; }
     showSyncStatus('synced');
     toast('Item deleted', 'success');
