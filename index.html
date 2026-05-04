@@ -964,6 +964,12 @@ select.form-control {
   background: linear-gradient(135deg, rgba(255,255,255,0.28), rgba(255,255,255,0.18));
   color: #fff;
 }
+#roleBadge.warehouse {
+  background: linear-gradient(135deg, #34d399 0%, #059669 100%);
+  color: #fff;
+  border-color: rgba(0,0,0,0.12);
+  box-shadow: 0 2px 6px -1px rgba(5,150,105,0.55);
+}
 
 /* ========== SAVE / SYNC STATUS ========== */
 #syncStatus {
@@ -1178,6 +1184,25 @@ select.form-control {
       <div id="archiveList"></div>
     </div>
   </div>
+
+  <!-- === SEND DELIVERY TAB (warehouse only) === -->
+  <div class="tab-page" id="pageSendDelivery">
+    <div class="card">
+      <h3 style="font-size:0.95rem; margin-bottom:6px;">📦 Send Delivery</h3>
+      <p style="font-size:0.78rem; color:var(--text-light); margin-bottom:10px; line-height:1.5;">
+        Hotels currently low on stock or out of stock. Tick the items you want to ship, set the quantity (defaults to fill them up to max), then send the delivery to the receiving hotel for ASM approval.
+      </p>
+      <button class="btn btn-outline btn-block" onclick="loadSendDeliveryTab()" style="font-size:0.82rem;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+        Refresh
+      </button>
+    </div>
+    <div id="sendDeliveryContent">
+      <div class="card" style="text-align:center; color:var(--text-light); padding:24px;">
+        Click <b>Refresh</b> to load every hotel's restock list.
+      </div>
+    </div>
+  </div>
 </main>
 
 <!-- ===== MODAL ===== -->
@@ -1213,6 +1238,10 @@ select.form-control {
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
     Reports
   </button>
+  <button class="tab-btn" id="tabBtnSendDelivery" onclick="switchTab('SendDelivery')" style="display:none;">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>
+    Send Delivery
+  </button>
 </nav>
 
 <script>
@@ -1221,7 +1250,7 @@ select.form-control {
    ================================================================= */
 // App version — bump alongside sw.js CACHE_NAME so ASM can verify which build
 // their device is actually running (shown under the email in the user menu).
-window.APP_VERSION = 'v50';
+window.APP_VERSION = 'v51';
 const SUPABASE_URL  = 'https://nogrnsjnwypihjaeulef.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5vZ3Juc2pud3lwaWhqYWV1bGVmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY0MDg2MzQsImV4cCI6MjA5MTk4NDYzNH0.ZxwsWtzzKO_nUSMQpH-FpbA2-5nYH8Nu1IegcKcYjW8';
 const PHOTO_BUCKET  = 'inventory-photos';
@@ -1279,16 +1308,30 @@ function requireASM(msg) {
 }
 function applyRoleUI() {
   const asm = isASM();
+  const warehouse = isWarehouse();
   const badge = document.getElementById('roleBadge');
   if (badge) {
-    // ASM → shield with check (authority). Welfare → heart (care).
+    // ASM → shield. Welfare → heart. Warehouse → truck/box.
     const asmIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l8 4v6c0 5-3.5 9-8 10-4.5-1-8-5-8-10V6l8-4z"/><polyline points="9 12 11 14 15 10"/></svg>';
     const welfareIcon = '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>';
-    badge.classList.remove('asm', 'welfare');
-    badge.classList.add('active', asm ? 'asm' : 'welfare');
-    badge.innerHTML = (asm ? asmIcon : welfareIcon) + '<span>' + (asm ? 'ASM' : 'Welfare') + '</span>';
-    badge.title = asm ? 'Signed in as ASM (full access)' : 'Signed in as Welfare team member';
+    const warehouseIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>';
+    badge.classList.remove('asm', 'welfare', 'warehouse');
+    if (warehouse) {
+      badge.classList.add('active', 'warehouse');
+      badge.innerHTML = warehouseIcon + '<span>Warehouse</span>';
+      badge.title = 'Signed in as Warehouse manager (sees every hotel)';
+    } else if (asm) {
+      badge.classList.add('active', 'asm');
+      badge.innerHTML = asmIcon + '<span>ASM</span>';
+      badge.title = 'Signed in as ASM (full access)';
+    } else {
+      badge.classList.add('active', 'welfare');
+      badge.innerHTML = welfareIcon + '<span>Welfare</span>';
+      badge.title = 'Signed in as Welfare team member';
+    }
   }
+  // Buttons that ASM gets access to. Warehouse does NOT need them — James
+  // doesn't issue items, dismiss counts, or approve hotel deliveries.
   const addBtn = document.getElementById('addItemBtn');
   if (addBtn) addBtn.style.display = asm ? '' : 'none';
   const applyBtn = document.getElementById('applyCountBtn');
@@ -1298,7 +1341,12 @@ function applyRoleUI() {
   const checkDeliveriesBtn = document.getElementById('userMenuCheckDeliveries');
   if (checkDeliveriesBtn) checkDeliveriesBtn.style.display = asm ? '' : 'none';
   const recordDeliveryBtn = document.getElementById('recordDeliveryBtn');
-  if (recordDeliveryBtn) recordDeliveryBtn.style.display = ''; // both roles can record
+  // Welfare/ASM can record deliveries inbound to their hotel; warehouse doesn't
+  // use this flow (they push outbound from the Send Delivery tab instead).
+  if (recordDeliveryBtn) recordDeliveryBtn.style.display = warehouse ? 'none' : '';
+  // Warehouse-only tab — visible only for James
+  const sendDeliveryTabBtn = document.getElementById('tabBtnSendDelivery');
+  if (sendDeliveryTabBtn) sendDeliveryTabBtn.style.display = warehouse ? '' : 'none';
 
   // Header label — show the active hotel name once we know it
   const orgEl = document.getElementById('orgNameHeader');
@@ -1673,7 +1721,10 @@ function switchTab(name) {
   document.querySelectorAll('.tab-page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   document.getElementById('page' + name).classList.add('active');
-  document.querySelectorAll('.tab-btn')[['Issue','Stock','Count','History','Dashboard','Reports'].indexOf(name)].classList.add('active');
+  const tabOrder = ['Issue','Stock','Count','History','Dashboard','Reports','SendDelivery'];
+  const idx = tabOrder.indexOf(name);
+  const allTabs = document.querySelectorAll('.tab-btn');
+  if (idx >= 0 && allTabs[idx]) allTabs[idx].classList.add('active');
 
   if (name === 'Issue') initIssueFlow();
   if (name === 'Stock') renderInventory();
@@ -1681,6 +1732,7 @@ function switchTab(name) {
   if (name === 'History') renderHistory();
   if (name === 'Dashboard') renderDashboard();
   if (name === 'Reports') { initReports(); renderArchive(); }
+  if (name === 'SendDelivery') loadSendDeliveryTab();
 }
 
 /* =================================================================
@@ -4771,6 +4823,211 @@ function rerenderDeliveryList() { renderRecordDeliveryModal(); }
 function clearDeliveryDraft() {
   deliveryDraft = {};
   renderRecordDeliveryModal();
+}
+
+/* =================================================================
+   SEND DELIVERY TAB — warehouse role only (James). Lists every
+   hotel's low-stock + out-of-stock items so he can decide what to
+   ship, and sends a pending delivery to the receiving hotel for
+   ASM approval (which is what tops up that hotel's stock).
+   ================================================================= */
+
+// In-memory state for the send-delivery tab. Keyed by hotelId.itemId → qty.
+let warehouseSendDraft = {};
+
+async function loadSendDeliveryTab() {
+  if (!isWarehouse()) {
+    document.getElementById('sendDeliveryContent').innerHTML =
+      '<div class="card" style="color:var(--text-light); text-align:center; padding:24px;">Warehouse access only.</div>';
+    return;
+  }
+  const container = document.getElementById('sendDeliveryContent');
+  container.innerHTML = '<div class="card" style="text-align:center; padding:24px; color:var(--text-light);"><span class="spinner" style="margin-right:8px;"></span> Loading restock list across all hotels…</div>';
+  try {
+    // Warehouse role bypasses RLS, so a single SELECT returns every hotel's items.
+    const { data: items, error } = await sb.from('items').select('*').order('name');
+    if (error) throw error;
+    // Also pull existing pending deliveries so we can mark items that already
+    // have a warehouse delivery in flight (avoids accidental duplicates).
+    const { data: pending, error: e2 } = await sb.from('deliveries')
+      .select('hotel_id, items, submitted_by, status').eq('status', 'pending');
+    if (e2) console.warn('[send-delivery] pending fetch failed:', e2);
+    renderSendDeliveryTab(items || [], pending || []);
+  } catch(e) {
+    console.error('[send-delivery] load failed:', e);
+    container.innerHTML = `<div class="card" style="color:var(--danger); padding:16px;">Could not load: ${esc(e.message || 'unknown error')}</div>`;
+  }
+}
+
+function renderSendDeliveryTab(allItems, pending) {
+  const container = document.getElementById('sendDeliveryContent');
+  if (!ALL_HOTELS.length) {
+    container.innerHTML = '<div class="card" style="color:var(--text-light); text-align:center; padding:24px;">No hotels found.</div>';
+    return;
+  }
+  // Group items by hotel_id. Only include items where current quantity is at
+  // or below min_stock (low + out of stock).
+  const byHotel = {};
+  ALL_HOTELS.forEach(h => { byHotel[h.id] = []; });
+  allItems.forEach(it => {
+    const min = Number(it.min_stock) || 0;
+    const qty = Number(it.quantity) || 0;
+    if (qty <= min) {
+      if (byHotel[it.hotel_id]) byHotel[it.hotel_id].push(it);
+    }
+  });
+  // For each hotel build a "pending warehouse delivery" map of itemId → qty
+  // already in flight (any pending delivery, regardless of who submitted).
+  const pendingByHotel = {};
+  ALL_HOTELS.forEach(h => { pendingByHotel[h.id] = {}; });
+  (pending || []).forEach(d => {
+    if (!pendingByHotel[d.hotel_id]) return;
+    (d.items || []).forEach(line => {
+      pendingByHotel[d.hotel_id][line.id] = (pendingByHotel[d.hotel_id][line.id] || 0) + (Number(line.qty) || 0);
+    });
+  });
+
+  const hotelCards = ALL_HOTELS.map(h => {
+    const items = byHotel[h.id] || [];
+    if (!items.length) {
+      return `<div class="card">
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+          <h3 style="font-size:0.95rem; margin:0;">${esc(h.name)}</h3>
+          <span style="font-size:0.72rem; color:var(--success); font-weight:700;">All stocked ✓</span>
+        </div>
+      </div>`;
+    }
+    const out = items.filter(i => (Number(i.quantity) || 0) <= 0).length;
+    const low = items.length - out;
+    const rows = items.map(i => {
+      const qty = Number(i.quantity) || 0;
+      const min = Number(i.min_stock) || 0;
+      const max = Number(i.max_stock) || (min * 2 || 20);
+      const recommend = Math.max(0, max - qty);
+      const draftKey = h.id + '::' + i.id;
+      const draftQty = warehouseSendDraft[draftKey] != null ? warehouseSendDraft[draftKey] : recommend;
+      const inFlight = pendingByHotel[h.id][i.id] || 0;
+      const isOut = qty <= 0;
+      const dotColor = isOut ? '#dc2626' : '#f59e0b';
+      const status = isOut ? 'Out' : 'Low';
+      return `
+        <div style="display:grid; grid-template-columns: 22px 1fr auto; gap:10px; align-items:center; padding:10px 12px; border-bottom:1px solid var(--border);">
+          <input type="checkbox" id="sd_${draftKey}" ${draftQty > 0 ? 'checked' : ''} onchange="toggleSendDeliveryRow('${h.id}','${i.id}', this.checked, ${recommend})" style="width:18px; height:18px; accent-color:var(--primary);">
+          <div style="min-width:0;">
+            <div style="font-weight:600; font-size:0.88rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+              <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:${dotColor}; margin-right:6px; vertical-align:middle;"></span>
+              ${esc(i.name)}
+              <span style="font-size:0.66rem; color:${dotColor}; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; margin-left:4px;">${status}</span>
+            </div>
+            <div style="font-size:0.72rem; color:var(--text-light);">
+              ${esc(i.category || '')} · stock <b>${qty}</b> / ${max} ${esc(i.unit || '')}
+              ${inFlight > 0 ? `· <span style="color:#2563eb;">${inFlight} pending</span>` : ''}
+            </div>
+          </div>
+          <input type="number" inputmode="numeric" min="0" step="1"
+            value="${draftQty}"
+            onchange="setSendDeliveryQty('${h.id}','${i.id}', this.value)"
+            style="width:64px; padding:6px 8px; text-align:right; border:1px solid var(--border); border-radius:6px; font-size:0.88rem;">
+        </div>`;
+    }).join('');
+    return `<div class="card" style="padding:0; overflow:hidden;">
+      <div style="padding:12px 14px; background:var(--bg); border-bottom:1px solid var(--border);">
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+          <h3 style="font-size:0.95rem; margin:0;">${esc(h.name)}</h3>
+          <span style="font-size:0.72rem; color:var(--text-light);">
+            ${out > 0 ? `<b style="color:#dc2626;">${out} out</b> · ` : ''}<b style="color:#f59e0b;">${low} low</b>
+          </span>
+        </div>
+      </div>
+      ${rows}
+      <div style="padding:10px 12px;">
+        <button class="btn btn-primary btn-block" onclick="sendWarehouseDelivery('${h.id}')">
+          Send selected to ${esc(h.name)}
+        </button>
+      </div>
+    </div>`;
+  }).join('');
+
+  container.innerHTML = hotelCards;
+}
+
+function toggleSendDeliveryRow(hotelId, itemId, checked, recommend) {
+  const key = hotelId + '::' + itemId;
+  if (checked) {
+    warehouseSendDraft[key] = (warehouseSendDraft[key] != null && warehouseSendDraft[key] > 0)
+      ? warehouseSendDraft[key]
+      : recommend;
+  } else {
+    warehouseSendDraft[key] = 0;
+  }
+  // Update qty input value to reflect change
+  const input = document.querySelector(`input[onchange*="setSendDeliveryQty('${hotelId}','${itemId}'"]`);
+  if (input) input.value = warehouseSendDraft[key] || 0;
+}
+
+function setSendDeliveryQty(hotelId, itemId, val) {
+  const key = hotelId + '::' + itemId;
+  warehouseSendDraft[key] = Math.max(0, parseInt(val, 10) || 0);
+  const cb = document.getElementById('sd_' + key);
+  if (cb) cb.checked = warehouseSendDraft[key] > 0;
+}
+
+async function sendWarehouseDelivery(targetHotelId) {
+  const targetHotel = ALL_HOTELS.find(h => h.id === targetHotelId);
+  if (!targetHotel) { toast('Hotel not found', 'error'); return; }
+  // Pull all draft entries for THIS hotel only
+  const lines = [];
+  Object.keys(warehouseSendDraft).forEach(key => {
+    const [hid, iid] = key.split('::');
+    if (hid !== targetHotelId) return;
+    const qty = warehouseSendDraft[key];
+    if (!qty || qty <= 0) return;
+    lines.push({ id: iid, qty });
+  });
+  if (!lines.length) { toast('Tick at least one item to send', 'warning'); return; }
+  // We need item details (name, category, unit) to attach to each line.
+  // Re-fetch the items so we don't trust possibly stale render data.
+  const ids = lines.map(l => l.id);
+  const { data: items, error } = await sb.from('items').select('id, name, category, unit')
+    .eq('hotel_id', targetHotelId).in('id', ids);
+  if (error) { toast('Lookup failed: ' + error.message, 'error'); return; }
+  const byId = {};
+  (items || []).forEach(it => { byId[it.id] = it; });
+  const fullLines = lines.map(l => {
+    const meta = byId[l.id] || {};
+    return {
+      id: l.id,
+      name: meta.name || 'Item',
+      category: meta.category || '',
+      unit: meta.unit || 'pcs',
+      qty: l.qty
+    };
+  });
+  const totalUnits = fullLines.reduce((s, l) => s + l.qty, 0);
+  const payload = {
+    submitted_by: (currentUser && currentUser.email) || 'warehouse',
+    items: fullLines,
+    notes: 'Shipment from warehouse',
+    summary: { totalItems: fullLines.length, totalUnits },
+    status: 'pending',
+    hotel_id: targetHotelId
+  };
+  showSyncStatus('syncing');
+  const { data: inserted, error: e2 } = await sb.from('deliveries')
+    .insert(payload).select('*').single();
+  if (e2) {
+    console.error('[send-delivery] insert failed:', e2);
+    showSyncStatus('error');
+    toast('Send failed: ' + (e2.message || 'unknown error'), 'error');
+    return;
+  }
+  showSyncStatus('synced');
+  toast(`Sent ${fullLines.length} item${fullLines.length !== 1 ? 's' : ''} (${totalUnits} unit${totalUnits !== 1 ? 's' : ''}) to ${targetHotel.name}`, 'success');
+  // Clear the drafts for this hotel and reload the tab so they disappear
+  Object.keys(warehouseSendDraft).forEach(key => {
+    if (key.startsWith(targetHotelId + '::')) delete warehouseSendDraft[key];
+  });
+  loadSendDeliveryTab();
 }
 
 // Welfare (or ASM) sends the draft delivery to cloud as pending
