@@ -1250,7 +1250,7 @@ select.form-control {
    ================================================================= */
 // App version — bump alongside sw.js CACHE_NAME so ASM can verify which build
 // their device is actually running (shown under the email in the user menu).
-window.APP_VERSION = 'v56';
+window.APP_VERSION = 'v57';
 const SUPABASE_URL  = 'https://nogrnsjnwypihjaeulef.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5vZ3Juc2pud3lwaWhqYWV1bGVmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY0MDg2MzQsImV4cCI6MjA5MTk4NDYzNH0.ZxwsWtzzKO_nUSMQpH-FpbA2-5nYH8Nu1IegcKcYjW8';
 const PHOTO_BUCKET  = 'inventory-photos';
@@ -2903,6 +2903,9 @@ async function deletePhotoLocal(id) {
 let dashChart = null;
 
 function renderDashboard() {
+  // Warehouse role: show a multi-hotel grid dashboard, no pie chart
+  if (isWarehouse()) return renderWarehouseDashboard();
+
   const items = getItems();
   const txns = getTransactions();
   const todayStr = today();
@@ -2937,12 +2940,16 @@ function renderDashboard() {
   items.forEach(i => { if (catCounts[i.category] !== undefined) catCounts[i.category] += i.quantity; });
   const usedCats = Object.entries(catCounts).filter(([,v]) => v > 0);
 
-  // 14-colour palette — bright enough for small slices, harmonises with app's indigo theme
+  // 14-colour palette
   const PIE_COLORS = [
     '#6366f1', '#06b6d4', '#a855f7', '#ec4899', '#f43f5e',
     '#f59e0b', '#eab308', '#84cc16', '#22c55e', '#14b8a6',
     '#0ea5e9', '#3b82f6', '#8b5cf6', '#d946ef'
   ];
+
+  // Show chart card (hidden for warehouse role above)
+  const chartCard = document.querySelector('#pageDashboard .card');
+  if (chartCard) chartCard.style.display = '';
 
   if (dashChart) dashChart.destroy();
   const ctx = document.getElementById('dashChart').getContext('2d');
@@ -2964,12 +2971,7 @@ function renderDashboard() {
       plugins: {
         legend: {
           position: 'bottom',
-          labels: {
-            font: { size: 11 },
-            boxWidth: 12,
-            padding: 8,
-            usePointStyle: true
-          }
+          labels: { font: { size: 11 }, boxWidth: 12, padding: 8, usePointStyle: true }
         },
         tooltip: {
           callbacks: {
@@ -2983,6 +2985,126 @@ function renderDashboard() {
       }
     }
   });
+}
+
+/* ------------------------------------------------------------------
+   WAREHOUSE DASHBOARD — replaces the Dashboard tab for warehouse role.
+   Shows a grid of hotel cards (sites only). Each card is collapsible
+   to reveal the items that are low or out of stock at that site.
+   ------------------------------------------------------------------ */
+let whDashExpanded = {};   // hotelId → true/false
+
+async function renderWarehouseDashboard() {
+  // Hide the pie chart card — warehouse has its own layout
+  const chartCard = document.querySelector('#pageDashboard .card');
+  if (chartCard) chartCard.style.display = 'none';
+  if (dashChart) { dashChart.destroy(); dashChart = null; }
+
+  const statsEl = document.getElementById('dashStats');
+  const alertEl = document.getElementById('dashAlerts');
+  statsEl.innerHTML = '<div style="text-align:center; padding:20px; color:var(--text-light);"><span class="spinner" style="margin-right:8px;"></span> Loading site stock…</div>';
+  alertEl.innerHTML = '';
+
+  // Fetch all site items (warehouse RLS bypasses hotel filter)
+  const siteHotels = ALL_HOTELS.filter(h => h.code !== 'WAREHOUSE');
+  const siteIds = siteHotels.map(h => h.id);
+  const { data: allItems, error } = await sb.from('items').select('*').in('hotel_id', siteIds).order('name');
+  if (error) {
+    statsEl.innerHTML = `<div class="card" style="color:var(--danger); padding:16px;">Could not load: ${esc(error.message)}</div>`;
+    return;
+  }
+
+  // Group by hotel
+  const byHotel = {};
+  siteHotels.forEach(h => { byHotel[h.id] = { out: [], low: [], ok: [] }; });
+  (allItems || []).forEach(it => {
+    const b = byHotel[it.hotel_id]; if (!b) return;
+    const qty = Number(it.quantity) || 0;
+    const min = Number(it.min_stock) || 0;
+    if (qty <= 0) b.out.push(it);
+    else if (min > 0 && qty <= min) b.low.push(it);
+    else b.ok.push(it);
+  });
+
+  const totalOut = siteHotels.reduce((s, h) => s + byHotel[h.id].out.length, 0);
+  const totalLow = siteHotels.reduce((s, h) => s + byHotel[h.id].low.length, 0);
+  const totalProducts = siteHotels.reduce((s, h) => s + byHotel[h.id].out.length + byHotel[h.id].low.length + byHotel[h.id].ok.length, 0);
+
+  statsEl.innerHTML = `
+    <div class="stats-grid" style="margin-bottom:10px;">
+      <div class="stat-card"><div class="stat-value">${siteHotels.length}</div><div class="stat-label">Sites</div></div>
+      <div class="stat-card"><div class="stat-value">${totalProducts}</div><div class="stat-label">Total Products</div></div>
+      <div class="stat-card" style="${totalOut > 0 ? 'border-color:#dc2626;' : ''}">
+        <div class="stat-value" style="color:${totalOut > 0 ? '#dc2626' : 'inherit'};">${totalOut}</div>
+        <div class="stat-label">Out of Stock</div>
+      </div>
+      <div class="stat-card" style="${totalLow > 0 ? 'border-color:#f59e0b;' : ''}">
+        <div class="stat-value" style="color:${totalLow > 0 ? '#f59e0b' : 'inherit'};">${totalLow}</div>
+        <div class="stat-label">Low Stock</div>
+      </div>
+    </div>`;
+
+  // Hotel grid — 2 columns, each card collapsible
+  const cards = siteHotels.map(h => {
+    const { out, low, ok } = byHotel[h.id];
+    const alertCount = out.length + low.length;
+    const isExpanded = !!whDashExpanded[h.id];
+    const statusColor = out.length > 0 ? '#dc2626' : low.length > 0 ? '#f59e0b' : '#16a34a';
+    const statusText = out.length > 0 ? `${out.length} out` : low.length > 0 ? `${low.length} low` : 'All stocked';
+
+    // Item rows (only shown when expanded)
+    const problemItems = [...out, ...low];
+    const itemRows = problemItems.map(i => {
+      const qty = Number(i.quantity) || 0;
+      const min = Number(i.min_stock) || 0;
+      const max = Number(i.max_stock) || Math.max(min * 2, 20);
+      const isOut = qty <= 0;
+      const dot = isOut ? '#dc2626' : '#f59e0b';
+      const need = Math.max(0, max - qty);
+      return `
+        <div style="display:grid; grid-template-columns:8px 1fr auto; gap:6px; align-items:start; padding:7px 12px; border-top:1px solid var(--border);">
+          <span style="display:inline-block; width:7px; height:7px; border-radius:50%; background:${dot}; margin-top:4px; flex-shrink:0;"></span>
+          <div style="min-width:0;">
+            <div style="font-size:0.8rem; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(i.name)}</div>
+            <div style="font-size:0.68rem; color:var(--text-light);">${esc(i.category||'')} · ${qty} ${esc(i.unit||'')}</div>
+          </div>
+          <div style="text-align:right; font-size:0.72rem; font-weight:700; color:${dot}; white-space:nowrap;">need ${need}</div>
+        </div>`;
+    }).join('');
+
+    const expandedSection = isExpanded ? `
+      <div id="whDashItems_${h.id}">
+        ${problemItems.length
+          ? itemRows + (ok.length > 0 ? `<div style="padding:6px 12px; font-size:0.7rem; color:var(--text-light); border-top:1px solid var(--border);">${ok.length} item${ok.length!==1?'s':''} fully stocked</div>` : '')
+          : `<div style="padding:10px 12px; font-size:0.8rem; color:var(--success); border-top:1px solid var(--border);">✓ All ${ok.length} items fully stocked</div>`
+        }
+      </div>` : '';
+
+    return `
+      <div class="card" style="padding:0; overflow:hidden; cursor:pointer;" onclick="toggleWhDashHotel('${h.id}')">
+        <div style="padding:12px 14px; display:flex; align-items:center; justify-content:space-between; gap:8px;">
+          <div style="min-width:0;">
+            <div style="font-weight:700; font-size:0.9rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(h.name)}</div>
+            <div style="font-size:0.7rem; color:var(--text-light); margin-top:2px;">${out.length + low.length + ok.length} products</div>
+          </div>
+          <div style="display:flex; align-items:center; gap:6px; flex-shrink:0;">
+            <span style="font-size:0.72rem; font-weight:700; color:${statusColor};">${statusText}</span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+              style="transition:transform 0.2s; transform:rotate(${isExpanded ? '180' : '0'}deg); color:var(--text-light);">
+              <polyline points="6 9 12 15 18 9"/>
+            </svg>
+          </div>
+        </div>
+        ${expandedSection}
+      </div>`;
+  }).join('');
+
+  alertEl.innerHTML = `<div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:4px;">${cards}</div>`;
+}
+
+function toggleWhDashHotel(hotelId) {
+  whDashExpanded[hotelId] = !whDashExpanded[hotelId];
+  renderWarehouseDashboard();
 }
 
 function downloadLowStockReport() {
@@ -3133,7 +3255,23 @@ async function fetchStockCountsForRange(from, to) {
   return data || [];
 }
 
+function _blockWarehouseReport() {
+  if (isWarehouse() && HOTEL && HOTEL.code === 'WAREHOUSE') {
+    toast('Switch to a site hotel to generate reports', 'warning');
+    document.getElementById('reportSummary').innerHTML = `
+      <div class="card" style="text-align:center; padding:24px; color:var(--text-light);">
+        <div style="font-size:2rem; margin-bottom:8px;">🏨</div>
+        <div style="font-weight:600; margin-bottom:4px;">Switch to a site to run reports</div>
+        <div style="font-size:0.8rem;">Reports are per-site. Use the hotel switcher in the menu to select Holiday Inn Wembley or Best Western Wembley first.</div>
+      </div>`;
+    document.getElementById('reportTable').innerHTML = '';
+    return true;
+  }
+  return false;
+}
+
 function generateReport() {
+  if (_blockWarehouseReport()) return;
   const from = document.getElementById('reportFrom').value;
   const to = document.getElementById('reportTo').value;
   if (!from || !to) { toast('Please select date range', 'warning'); return; }
@@ -3308,6 +3446,7 @@ async function generateStockCountReport(from, to) {
 }
 
 function downloadExcelReport() {
+  if (_blockWarehouseReport()) return;
   const from = document.getElementById('reportFrom').value;
   const to = document.getElementById('reportTo').value;
   if (!from || !to) { toast('Please select date range', 'warning'); return; }
@@ -3328,7 +3467,7 @@ function downloadExcelTransactionReport(from, to) {
 
   // Sheet 1: Summary
   const summaryData = [
-    ['Inventory Report'],
+    ['Inventory Report — ' + _reportHotelName()],
     ['Period', `${from} to ${to}`],
     ['Generated', new Date().toLocaleString()],
     [],
@@ -3406,7 +3545,7 @@ async function downloadExcelDeliveryReport(from, to) {
 
   const totalUnits = rows.reduce((s, r) => s + ((r.items || []).reduce((a, i) => a + (Number(i.qty) || 0), 0)), 0);
   const summary = [
-    ['Delivery Report'],
+    ['Delivery Report — ' + _reportHotelName()],
     ['Period', `${from} to ${to}`],
     ['Generated', new Date().toLocaleString()],
     [],
@@ -3456,7 +3595,7 @@ async function downloadExcelStockCountReport(from, to) {
   const accuracy = totalSystem > 0 ? Math.max(0, 100 - (totalAbsVar / totalSystem) * 100) : 100;
 
   const summary = [
-    ['Stock Count Report'],
+    ['Stock Count Report — ' + _reportHotelName()],
     ['Period', `${from} to ${to}`],
     ['Generated', new Date().toLocaleString()],
     [],
@@ -3501,6 +3640,7 @@ async function downloadExcelStockCountReport(from, to) {
    PDF EXPORT — uses jsPDF + autoTable. Same shape as Excel reports.
    ================================================================= */
 function downloadPDFReport() {
+  if (_blockWarehouseReport()) return;
   const from = document.getElementById('reportFrom').value;
   const to = document.getElementById('reportTo').value;
   if (!from || !to) { toast('Please select date range', 'warning'); return; }
@@ -3513,14 +3653,20 @@ function downloadPDFReport() {
 function _newPdf(title, from, to) {
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+  const hotelName = (HOTEL && HOTEL.name && HOTEL.code !== 'WAREHOUSE') ? HOTEL.name : 'SOS Property';
   doc.setFontSize(16);
-  doc.text(title, 40, 40);
+  doc.text(`${hotelName} — ${title}`, 40, 40);
   doc.setFontSize(10);
   doc.setTextColor(100);
   doc.text(`Period: ${from} to ${to}`, 40, 58);
   doc.text(`Generated: ${new Date().toLocaleString()}`, 40, 72);
   doc.setTextColor(0);
   return doc;
+}
+
+// Returns the current hotel name for use in Excel reports
+function _reportHotelName() {
+  return (HOTEL && HOTEL.name && HOTEL.code !== 'WAREHOUSE') ? HOTEL.name : 'SOS Property';
 }
 
 function downloadPDFTransactionReport(from, to) {
