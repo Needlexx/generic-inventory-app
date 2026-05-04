@@ -1250,7 +1250,7 @@ select.form-control {
    ================================================================= */
 // App version — bump alongside sw.js CACHE_NAME so ASM can verify which build
 // their device is actually running (shown under the email in the user menu).
-window.APP_VERSION = 'v51';
+window.APP_VERSION = 'v52';
 const SUPABASE_URL  = 'https://nogrnsjnwypihjaeulef.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5vZ3Juc2pud3lwaWhqYWV1bGVmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY0MDg2MzQsImV4cCI6MjA5MTk4NDYzNH0.ZxwsWtzzKO_nUSMQpH-FpbA2-5nYH8Nu1IegcKcYjW8';
 const PHOTO_BUCKET  = 'inventory-photos';
@@ -1347,6 +1347,33 @@ function applyRoleUI() {
   // Warehouse-only tab — visible only for James
   const sendDeliveryTabBtn = document.getElementById('tabBtnSendDelivery');
   if (sendDeliveryTabBtn) sendDeliveryTabBtn.style.display = warehouse ? '' : 'none';
+  // Hide hotel-staff tabs for the warehouse role — James doesn't issue items,
+  // run stock counts, or browse a per-hotel transaction history.
+  const allTabBtns = document.querySelectorAll('.tab-bar > .tab-btn');
+  const hideForWarehouse = ['Issue', 'Count', 'History'];
+  const fullTabOrder = ['Issue','Stock','Count','History','Dashboard','Reports','SendDelivery'];
+  fullTabOrder.forEach((nm, i) => {
+    if (!allTabBtns[i]) return;
+    if (hideForWarehouse.includes(nm)) {
+      allTabBtns[i].style.display = warehouse ? 'none' : '';
+    }
+  });
+  // Hide the per-hotel Stock summary cards for warehouse — they have their
+  // own multi-hotel summary in the warehouse Stock view.
+  const stockSummary = document.getElementById('stockSummary');
+  if (stockSummary && warehouse) stockSummary.innerHTML = '';
+  // Hide the per-hotel category pills + search for warehouse — the warehouse
+  // Stock view has its own controls.
+  const stockSearchCard = document.getElementById('stockSearch')?.parentElement;
+  if (stockSearchCard) stockSearchCard.style.display = warehouse ? 'none' : '';
+  // Default landing tab for warehouse → the Sites overview (Stock tab)
+  if (warehouse) {
+    const issueBtn = allTabBtns[0];
+    if (issueBtn && issueBtn.classList.contains('active')) {
+      // currently sitting on Issue (which we just hid) — flip to Stock
+      switchTab('Stock');
+    }
+  }
 
   // Header label — show the active hotel name once we know it
   const orgEl = document.getElementById('orgNameHeader');
@@ -1749,6 +1776,9 @@ function renderCategoryPills() {
 }
 
 function renderInventory() {
+  // Warehouse role sees a multi-hotel dashboard, not a single-hotel list.
+  if (isWarehouse()) return renderWarehouseStockView();
+
   const q = (document.getElementById('stockSearch')?.value || '').toLowerCase();
   const allItems = getItems();
   let items = allItems;
@@ -5028,6 +5058,458 @@ async function sendWarehouseDelivery(targetHotelId) {
     if (key.startsWith(targetHotelId + '::')) delete warehouseSendDraft[key];
   });
   loadSendDeliveryTab();
+}
+
+/* =================================================================
+   WAREHOUSE STOCK VIEW — replaces the Stock tab for the warehouse
+   role. Has two sub-modes: 'sites' (every hotel's low/out items)
+   and 'warehouse' (James's central inventory CRUD).
+   ================================================================= */
+let warehouseStockMode = 'sites';                  // 'sites' | 'warehouse'
+let warehouseSitesData = { items: [], loading: false, error: null };
+let warehouseOwnItems = { items: [], loading: false, error: null };
+
+function renderWarehouseStockView() {
+  const el = document.getElementById('stockList');
+  if (!el) return;
+  el.innerHTML = `
+    <div class="card" style="padding:12px;">
+      <div style="display:grid; grid-template-columns: 1fr 1fr; gap:6px; margin-bottom:0;">
+        <button class="btn btn-outline" onclick="setWarehouseMode('sites')"
+          style="padding:10px 4px; ${warehouseStockMode === 'sites' ? 'background:var(--primary); color:#fff; border-color:var(--primary);' : ''}">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:middle; margin-right:4px;"><path d="M3 21h18M5 21V7l8-4 8 4v14M9 9v.01M9 12v.01M9 15v.01M9 18v.01"/></svg>
+          Sites view
+        </button>
+        <button class="btn btn-outline" onclick="setWarehouseMode('warehouse')"
+          style="padding:10px 4px; ${warehouseStockMode === 'warehouse' ? 'background:var(--primary); color:#fff; border-color:var(--primary);' : ''}">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:middle; margin-right:4px;"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/></svg>
+          Warehouse view
+        </button>
+      </div>
+    </div>
+    <div id="warehouseStockBody"></div>`;
+  if (warehouseStockMode === 'sites') {
+    loadWarehouseSitesView();
+  } else {
+    loadWarehouseOwnView();
+  }
+}
+
+function setWarehouseMode(mode) {
+  warehouseStockMode = mode;
+  renderWarehouseStockView();
+}
+
+/* ---------- Sites view: every hotel's low/out items ---------- */
+
+async function loadWarehouseSitesView() {
+  const body = document.getElementById('warehouseStockBody');
+  if (!body) return;
+  body.innerHTML = '<div class="card" style="text-align:center; padding:24px; color:var(--text-light);"><span class="spinner" style="margin-right:8px;"></span> Loading every hotel\'s stock…</div>';
+  warehouseSitesData.loading = true;
+  warehouseSitesData.error = null;
+  try {
+    const { data, error } = await sb.from('items').select('*').order('name');
+    if (error) throw error;
+    warehouseSitesData.items = data || [];
+    warehouseSitesData.loading = false;
+    renderWarehouseSitesView();
+  } catch (e) {
+    console.error('[warehouse] sites load failed:', e);
+    warehouseSitesData.loading = false;
+    warehouseSitesData.error = e.message || 'Could not load.';
+    body.innerHTML = `<div class="card" style="color:var(--danger); padding:16px;">Could not load: ${esc(warehouseSitesData.error)}</div>`;
+  }
+}
+
+function renderWarehouseSitesView() {
+  const body = document.getElementById('warehouseStockBody');
+  if (!body) return;
+  const items = warehouseSitesData.items || [];
+
+  // Group by hotel; for each hotel split into out/low/ok
+  const byHotel = {};
+  ALL_HOTELS.forEach(h => { byHotel[h.id] = { out: [], low: [], ok: [] }; });
+  items.forEach(it => {
+    const bucket = byHotel[it.hotel_id];
+    if (!bucket) return;
+    const qty = Number(it.quantity) || 0;
+    const min = Number(it.min_stock) || 0;
+    if (qty <= 0) bucket.out.push(it);
+    else if (qty <= min) bucket.low.push(it);
+    else bucket.ok.push(it);
+  });
+
+  // Headline stats
+  const totalHotels = ALL_HOTELS.length;
+  const totalOut = ALL_HOTELS.reduce((s, h) => s + byHotel[h.id].out.length, 0);
+  const totalLow = ALL_HOTELS.reduce((s, h) => s + byHotel[h.id].low.length, 0);
+
+  const headline = `
+    <div class="stats-grid" style="margin-bottom:10px;">
+      <div class="stat-card"><div class="stat-value">${totalHotels}</div><div class="stat-label">Hotels</div></div>
+      <div class="stat-card" style="${totalOut > 0 ? 'border-color:#dc2626;' : ''}"><div class="stat-value" style="color:${totalOut > 0 ? '#dc2626' : 'inherit'};">${totalOut}</div><div class="stat-label">Out of stock</div></div>
+      <div class="stat-card" style="${totalLow > 0 ? 'border-color:#f59e0b;' : ''}"><div class="stat-value" style="color:${totalLow > 0 ? '#f59e0b' : 'inherit'};">${totalLow}</div><div class="stat-label">Low stock</div></div>
+    </div>
+    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:6px; margin-bottom:10px;">
+      <button class="btn btn-success" onclick="downloadLowStockExcel()" style="padding:10px 6px; font-size:0.82rem;">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Download Low Stock (Excel)
+      </button>
+      <button class="btn btn-danger" onclick="downloadLowStockPDF()" style="padding:10px 6px; font-size:0.82rem; background:#dc2626;">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        Download Low Stock (PDF)
+      </button>
+    </div>`;
+
+  // One card per hotel
+  const hotelCards = ALL_HOTELS.map(h => {
+    const { out, low, ok } = byHotel[h.id];
+    if (!out.length && !low.length) {
+      return `<div class="card" style="padding:14px;">
+        <div style="display:flex; align-items:center; justify-content:space-between;">
+          <div>
+            <div style="font-weight:700; font-size:0.95rem;">${esc(h.name)}</div>
+            <div style="font-size:0.72rem; color:var(--text-light);">${ok.length} item${ok.length !== 1 ? 's' : ''} stocked</div>
+          </div>
+          <span style="font-size:0.7rem; color:var(--success); font-weight:700;">All stocked ✓</span>
+        </div>
+      </div>`;
+    }
+    const renderLine = (i, isOut) => {
+      const qty = Number(i.quantity) || 0;
+      const min = Number(i.min_stock) || 0;
+      const max = Number(i.max_stock) || (min * 2 || 20);
+      const recommend = Math.max(0, max - qty);
+      const dot = isOut ? '#dc2626' : '#f59e0b';
+      return `
+        <div style="display:grid; grid-template-columns: 12px 1fr auto; gap:8px; align-items:center; padding:8px 12px; border-bottom:1px solid var(--border);">
+          <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:${dot};"></span>
+          <div style="min-width:0;">
+            <div style="font-weight:600; font-size:0.85rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(i.name)}</div>
+            <div style="font-size:0.7rem; color:var(--text-light);">${esc(i.category || '')} · ${qty} / ${max} ${esc(i.unit || '')}</div>
+          </div>
+          <div style="text-align:right; font-size:0.72rem;">
+            <div style="font-weight:700; color:${dot};">order ${recommend}</div>
+            <div style="color:var(--text-light); font-size:0.66rem;">${esc(i.unit || '')}</div>
+          </div>
+        </div>`;
+    };
+    return `<div class="card" style="padding:0; overflow:hidden;">
+      <div style="padding:12px 14px; background:var(--bg); border-bottom:1px solid var(--border);">
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+          <div>
+            <div style="font-weight:700; font-size:0.95rem;">${esc(h.name)}</div>
+            <div style="font-size:0.72rem; color:var(--text-light);">${out.length + low.length} item${out.length + low.length !== 1 ? 's' : ''} need attention · ${ok.length} stocked</div>
+          </div>
+          <span style="font-size:0.72rem;">
+            ${out.length > 0 ? `<b style="color:#dc2626;">${out.length} out</b>${low.length > 0 ? ' · ' : ''}` : ''}
+            ${low.length > 0 ? `<b style="color:#f59e0b;">${low.length} low</b>` : ''}
+          </span>
+        </div>
+      </div>
+      ${out.map(i => renderLine(i, true)).join('')}
+      ${low.map(i => renderLine(i, false)).join('')}
+    </div>`;
+  }).join('');
+
+  body.innerHTML = headline + hotelCards;
+}
+
+async function downloadLowStockExcel() {
+  const items = warehouseSitesData.items || [];
+  if (!items.length) { toast('Nothing loaded yet — tap Refresh first', 'warning'); return; }
+  const hotelById = {}; ALL_HOTELS.forEach(h => { hotelById[h.id] = h; });
+  const lowOrOut = items.filter(i => (Number(i.quantity) || 0) <= (Number(i.min_stock) || 0));
+  if (!lowOrOut.length) { toast('Every hotel is fully stocked — nothing to order', 'success'); return; }
+
+  const wb = XLSX.utils.book_new();
+
+  // Summary sheet
+  const totalOut = lowOrOut.filter(i => (Number(i.quantity) || 0) <= 0).length;
+  const totalLow = lowOrOut.length - totalOut;
+  const summary = [
+    ['Low Stock Report — All Hotels'],
+    ['Generated', new Date().toLocaleString('en-GB')],
+    [],
+    ['Hotels covered', ALL_HOTELS.length],
+    ['Items out of stock', totalOut],
+    ['Items low (at or below min)', totalLow],
+    ['Total units to order', lowOrOut.reduce((s, i) => s + (Math.max(0, (Number(i.max_stock) || 20) - (Number(i.quantity) || 0))), 0)],
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summary), 'Summary');
+
+  // Combined sheet — one row per item × hotel
+  const rows = [['Hotel', 'Item', 'Category', 'Current Qty', 'Min Stock', 'Max Stock', 'Order Qty', 'Unit', 'Status']];
+  // Sort: out of stock first, then by hotel name, then by item name
+  lowOrOut.slice().sort((a, b) => {
+    const aOut = (Number(a.quantity) || 0) <= 0 ? 0 : 1;
+    const bOut = (Number(b.quantity) || 0) <= 0 ? 0 : 1;
+    if (aOut !== bOut) return aOut - bOut;
+    const ha = (hotelById[a.hotel_id]?.name || '').localeCompare(hotelById[b.hotel_id]?.name || '');
+    if (ha !== 0) return ha;
+    return (a.name || '').localeCompare(b.name || '');
+  }).forEach(i => {
+    const qty = Number(i.quantity) || 0;
+    const min = Number(i.min_stock) || 0;
+    const max = Number(i.max_stock) || 20;
+    const order = Math.max(0, max - qty);
+    const status = qty <= 0 ? 'OUT OF STOCK' : 'LOW';
+    rows.push([hotelById[i.hotel_id]?.name || '?', i.name, i.category, qty, min, max, order, i.unit || 'pcs', status]);
+  });
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = [{wch:24},{wch:32},{wch:14},{wch:11},{wch:10},{wch:10},{wch:10},{wch:8},{wch:14}];
+  XLSX.utils.book_append_sheet(wb, ws, 'Low Stock');
+
+  // Per-hotel sheets
+  ALL_HOTELS.forEach(h => {
+    const hotelItems = lowOrOut.filter(i => i.hotel_id === h.id);
+    if (!hotelItems.length) return;
+    const sheet = [['Item', 'Category', 'Current Qty', 'Min Stock', 'Max Stock', 'Order Qty', 'Unit', 'Status']];
+    hotelItems.sort((a, b) => ((Number(a.quantity) || 0) - (Number(b.quantity) || 0)) || (a.name || '').localeCompare(b.name || ''))
+      .forEach(i => {
+        const qty = Number(i.quantity) || 0;
+        const max = Number(i.max_stock) || 20;
+        sheet.push([i.name, i.category, qty, Number(i.min_stock) || 0, max, Math.max(0, max - qty), i.unit || 'pcs', qty <= 0 ? 'OUT OF STOCK' : 'LOW']);
+      });
+    const wsH = XLSX.utils.aoa_to_sheet(sheet);
+    wsH['!cols'] = [{wch:32},{wch:14},{wch:11},{wch:10},{wch:10},{wch:10},{wch:8},{wch:14}];
+    // Excel sheet names max 31 chars and can't have certain chars
+    const sheetName = (h.name || h.code || 'Hotel').replace(/[\\/?*\[\]]/g, '').slice(0, 31);
+    XLSX.utils.book_append_sheet(wb, wsH, sheetName);
+  });
+
+  const today = new Date().toISOString().slice(0, 10);
+  XLSX.writeFile(wb, `LowStock_All_Hotels_${today}.xlsx`);
+  toast('Low stock report downloaded', 'success');
+}
+
+function downloadLowStockPDF() {
+  if (!window.jspdf || !window.jspdf.jsPDF) { toast('PDF library not loaded yet', 'error'); return; }
+  const items = warehouseSitesData.items || [];
+  if (!items.length) { toast('Nothing loaded yet — tap Refresh first', 'warning'); return; }
+  const hotelById = {}; ALL_HOTELS.forEach(h => { hotelById[h.id] = h; });
+  const lowOrOut = items.filter(i => (Number(i.quantity) || 0) <= (Number(i.min_stock) || 0));
+  if (!lowOrOut.length) { toast('Every hotel is fully stocked — nothing to order', 'success'); return; }
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+  doc.setFontSize(16);
+  doc.text('Low Stock Report — All Hotels', 40, 40);
+  doc.setFontSize(10);
+  doc.setTextColor(100);
+  doc.text('Generated: ' + new Date().toLocaleString('en-GB'), 40, 58);
+  const totalOut = lowOrOut.filter(i => (Number(i.quantity) || 0) <= 0).length;
+  doc.text(`${ALL_HOTELS.length} hotels · ${totalOut} out of stock · ${lowOrOut.length - totalOut} low`, 40, 72);
+  doc.setTextColor(0);
+
+  const body = lowOrOut.slice().sort((a, b) => {
+    const aOut = (Number(a.quantity) || 0) <= 0 ? 0 : 1;
+    const bOut = (Number(b.quantity) || 0) <= 0 ? 0 : 1;
+    if (aOut !== bOut) return aOut - bOut;
+    const ha = (hotelById[a.hotel_id]?.name || '').localeCompare(hotelById[b.hotel_id]?.name || '');
+    if (ha !== 0) return ha;
+    return (a.name || '').localeCompare(b.name || '');
+  }).map(i => {
+    const qty = Number(i.quantity) || 0;
+    const max = Number(i.max_stock) || 20;
+    return [
+      hotelById[i.hotel_id]?.name || '?',
+      i.name, i.category || '',
+      String(qty), String(Number(i.min_stock) || 0), String(max),
+      String(Math.max(0, max - qty)), i.unit || 'pcs',
+      qty <= 0 ? 'OUT' : 'LOW'
+    ];
+  });
+
+  doc.autoTable({
+    startY: 90,
+    head: [['Hotel', 'Item', 'Category', 'Qty', 'Min', 'Max', 'Order', 'Unit', 'Status']],
+    body,
+    styles: { fontSize: 8, cellPadding: 3 },
+    headStyles: { fillColor: [220, 38, 38] },
+    didDrawCell: (data) => {
+      if (data.section === 'body' && data.column.index === 8) {
+        const v = data.cell.raw;
+        if (v === 'OUT') { data.cell.styles.textColor = [220, 38, 38]; data.cell.styles.fontStyle = 'bold'; }
+        else if (v === 'LOW') { data.cell.styles.textColor = [245, 158, 11]; data.cell.styles.fontStyle = 'bold'; }
+      }
+    }
+  });
+
+  const today = new Date().toISOString().slice(0, 10);
+  doc.save(`LowStock_All_Hotels_${today}.pdf`);
+  toast('Low stock PDF downloaded', 'success');
+}
+
+/* ---------- Warehouse view: James's central inventory ---------- */
+
+async function loadWarehouseOwnView() {
+  const body = document.getElementById('warehouseStockBody');
+  if (!body) return;
+  body.innerHTML = '<div class="card" style="text-align:center; padding:24px; color:var(--text-light);"><span class="spinner" style="margin-right:8px;"></span> Loading warehouse stock…</div>';
+  try {
+    const { data, error } = await sb.from('warehouse_items').select('*').order('name');
+    if (error) throw error;
+    warehouseOwnItems.items = data || [];
+    renderWarehouseOwnView();
+  } catch(e) {
+    console.error('[warehouse] own load failed:', e);
+    const msg = e.message || 'Could not load.';
+    if (/relation .* does not exist/i.test(msg)) {
+      body.innerHTML = `<div class="card" style="color:var(--danger); padding:16px;">
+        Warehouse table not set up yet. Run <b>add-warehouse-stock-migration.sql</b> in the Supabase SQL Editor first.
+      </div>`;
+    } else {
+      body.innerHTML = `<div class="card" style="color:var(--danger); padding:16px;">Could not load: ${esc(msg)}</div>`;
+    }
+  }
+}
+
+function renderWarehouseOwnView() {
+  const body = document.getElementById('warehouseStockBody');
+  if (!body) return;
+  const items = warehouseOwnItems.items || [];
+  const totalUnits = items.reduce((s, i) => s + (Number(i.quantity) || 0), 0);
+  const lowCount = items.filter(i => (Number(i.quantity) || 0) <= (Number(i.min_stock) || 0)).length;
+
+  const list = items.length ? items.map(i => {
+    const qty = Number(i.quantity) || 0;
+    const min = Number(i.min_stock) || 0;
+    const isLow = qty <= min;
+    return `
+      <div style="display:grid; grid-template-columns: 1fr auto auto; gap:8px; align-items:center; padding:10px 12px; border-bottom:1px solid var(--border);">
+        <div style="min-width:0;">
+          <div style="font-weight:600; font-size:0.88rem;">${esc(i.name)}</div>
+          <div style="font-size:0.72rem; color:var(--text-light);">
+            ${esc(i.category || '')} · ${isLow ? '<span style="color:#f59e0b; font-weight:700;">LOW</span> · ' : ''}min ${min} ${esc(i.unit || '')}
+          </div>
+        </div>
+        <input type="number" inputmode="numeric" min="0" step="1" value="${qty}"
+          onchange="updateWarehouseItemQty('${i.id}', this.value)"
+          style="width:74px; padding:6px 8px; text-align:right; border:1px solid var(--border); border-radius:6px; font-size:0.88rem;">
+        <button class="btn btn-outline" onclick="openEditWarehouseItem('${i.id}')" style="padding:6px 10px; font-size:0.78rem;">Edit</button>
+      </div>`;
+  }).join('') : '<div style="padding:30px; text-align:center; color:var(--text-light);">No warehouse items yet. Tap <b>Add item</b> to start.</div>';
+
+  body.innerHTML = `
+    <div class="stats-grid" style="margin-bottom:10px;">
+      <div class="stat-card"><div class="stat-value">${items.length}</div><div class="stat-label">Products</div></div>
+      <div class="stat-card"><div class="stat-value">${totalUnits}</div><div class="stat-label">Units in warehouse</div></div>
+      <div class="stat-card" style="${lowCount > 0 ? 'border-color:#f59e0b;' : ''}"><div class="stat-value" style="color:${lowCount > 0 ? '#f59e0b' : 'inherit'};">${lowCount}</div><div class="stat-label">Low stock</div></div>
+    </div>
+    <button class="btn btn-primary btn-block" onclick="openAddWarehouseItem()" style="margin-bottom:10px;">+ Add item to warehouse</button>
+    <div class="card" style="padding:0; overflow:hidden;">${list}</div>`;
+}
+
+async function updateWarehouseItemQty(id, val) {
+  const n = Math.max(0, parseInt(val, 10) || 0);
+  showSyncStatus('syncing');
+  const { error } = await sb.from('warehouse_items').update({ quantity: n }).eq('id', id);
+  if (error) {
+    showSyncStatus('error');
+    toast('Could not update: ' + (error.message || ''), 'error');
+    return;
+  }
+  showSyncStatus('synced');
+  // Update local cache so the row reflects without a full reload
+  const it = warehouseOwnItems.items.find(x => x.id === id);
+  if (it) it.quantity = n;
+  // Re-render to update LOW marker if min_stock crossed
+  renderWarehouseOwnView();
+}
+
+function openAddWarehouseItem() {
+  openWarehouseItemModal(null);
+}
+
+function openEditWarehouseItem(id) {
+  const it = warehouseOwnItems.items.find(x => x.id === id);
+  if (!it) { toast('Item not found', 'error'); return; }
+  openWarehouseItemModal(it);
+}
+
+function openWarehouseItemModal(existing) {
+  const isEdit = !!existing;
+  const cats = CATEGORIES.map(c =>
+    `<option value="${esc(c)}" ${existing && existing.category === c ? 'selected' : ''}>${esc(c)}</option>`
+  ).join('');
+  const units = UNITS.map(u =>
+    `<option value="${esc(u)}" ${existing && existing.unit === u ? 'selected' : ''}>${esc(u)}</option>`
+  ).join('');
+  openModal(`
+    <div class="modal-header">
+      <h3>${isEdit ? 'Edit warehouse item' : 'Add warehouse item'}</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Item name</label>
+      <input class="form-control" id="whItemName" value="${existing ? esc(existing.name) : ''}" placeholder="e.g. Baby formula">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Category</label>
+      <select class="form-control" id="whItemCategory">${cats}</select>
+    </div>
+    <div style="display:flex; gap:8px;">
+      <div class="form-group" style="flex:1;">
+        <label class="form-label">Quantity</label>
+        <input class="form-control" type="number" inputmode="numeric" min="0" id="whItemQty" value="${existing ? existing.quantity : 0}">
+      </div>
+      <div class="form-group" style="flex:1;">
+        <label class="form-label">Unit</label>
+        <select class="form-control" id="whItemUnit">${units}</select>
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Min stock</label>
+      <input class="form-control" type="number" inputmode="numeric" min="0" id="whItemMin" value="${existing ? existing.min_stock : 5}">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Product code (optional)</label>
+      <input class="form-control" id="whItemCode" value="${existing && existing.product_code ? esc(existing.product_code) : ''}">
+    </div>
+    <button class="btn btn-primary btn-block" onclick="saveWarehouseItem(${isEdit ? `'${existing.id}'` : 'null'})">
+      ${isEdit ? 'Save changes' : 'Add to warehouse'}
+    </button>
+    ${isEdit ? `<button class="btn btn-outline btn-block" onclick="deleteWarehouseItem('${existing.id}')" style="margin-top:8px; color:#dc2626; border-color:#dc2626;">Delete item</button>` : ''}
+  `);
+}
+
+async function saveWarehouseItem(id) {
+  const name = (document.getElementById('whItemName').value || '').trim();
+  const category = document.getElementById('whItemCategory').value;
+  const quantity = Math.max(0, parseInt(document.getElementById('whItemQty').value, 10) || 0);
+  const unit = document.getElementById('whItemUnit').value;
+  const min_stock = Math.max(0, parseInt(document.getElementById('whItemMin').value, 10) || 0);
+  const product_code = (document.getElementById('whItemCode').value || '').trim() || null;
+  if (!name) { toast('Name is required', 'warning'); return; }
+  showSyncStatus('syncing');
+  if (id) {
+    const { error } = await sb.from('warehouse_items')
+      .update({ name, category, quantity, unit, min_stock, product_code })
+      .eq('id', id);
+    if (error) { showSyncStatus('error'); toast('Save failed: ' + error.message, 'error'); return; }
+  } else {
+    const { error } = await sb.from('warehouse_items')
+      .insert({ name, category, quantity, unit, min_stock, product_code });
+    if (error) { showSyncStatus('error'); toast('Save failed: ' + error.message, 'error'); return; }
+  }
+  showSyncStatus('synced');
+  toast(id ? 'Item updated' : 'Item added to warehouse', 'success');
+  closeModal();
+  loadWarehouseOwnView();
+}
+
+async function deleteWarehouseItem(id) {
+  showConfirm('Delete warehouse item?', 'This removes the item from your warehouse list. It does NOT affect any hotel\'s stock.', async () => {
+    showSyncStatus('syncing');
+    const { error } = await sb.from('warehouse_items').delete().eq('id', id);
+    if (error) { showSyncStatus('error'); toast('Delete failed: ' + error.message, 'error'); return; }
+    showSyncStatus('synced');
+    toast('Item deleted', 'success');
+    closeModal();
+    loadWarehouseOwnView();
+  });
 }
 
 // Welfare (or ASM) sends the draft delivery to cloud as pending
