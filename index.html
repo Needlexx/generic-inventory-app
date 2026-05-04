@@ -1250,7 +1250,7 @@ select.form-control {
    ================================================================= */
 // App version — bump alongside sw.js CACHE_NAME so ASM can verify which build
 // their device is actually running (shown under the email in the user menu).
-window.APP_VERSION = 'v55';
+window.APP_VERSION = 'v56';
 const SUPABASE_URL  = 'https://nogrnsjnwypihjaeulef.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5vZ3Juc2pud3lwaWhqYWV1bGVmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY0MDg2MzQsImV4cCI6MjA5MTk4NDYzNH0.ZxwsWtzzKO_nUSMQpH-FpbA2-5nYH8Nu1IegcKcYjW8';
 const PHOTO_BUCKET  = 'inventory-photos';
@@ -4896,9 +4896,10 @@ function renderSendDeliveryTab(allItems, pending) {
     return;
   }
   // Group items by hotel_id. Only include items where current quantity is at
-  // or below min_stock (low + out of stock).
+  // or below min_stock (low + out of stock). Exclude the WAREHOUSE pseudo-hotel.
+  const siteHotelsOnly = ALL_HOTELS.filter(h => h.code !== 'WAREHOUSE');
   const byHotel = {};
-  ALL_HOTELS.forEach(h => { byHotel[h.id] = []; });
+  siteHotelsOnly.forEach(h => { byHotel[h.id] = []; });
   allItems.forEach(it => {
     const min = Number(it.min_stock) || 0;
     const qty = Number(it.quantity) || 0;
@@ -4909,7 +4910,7 @@ function renderSendDeliveryTab(allItems, pending) {
   // For each hotel build a "pending warehouse delivery" map of itemId → qty
   // already in flight (any pending delivery, regardless of who submitted).
   const pendingByHotel = {};
-  ALL_HOTELS.forEach(h => { pendingByHotel[h.id] = {}; });
+  siteHotelsOnly.forEach(h => { pendingByHotel[h.id] = {}; });
   (pending || []).forEach(d => {
     if (!pendingByHotel[d.hotel_id]) return;
     (d.items || []).forEach(line => {
@@ -4917,7 +4918,7 @@ function renderSendDeliveryTab(allItems, pending) {
     });
   });
 
-  const hotelCards = ALL_HOTELS.map(h => {
+  const hotelCards = siteHotelsOnly.map(h => {
     const items = byHotel[h.id] || [];
     if (!items.length) {
       return `<div class="card">
@@ -5127,12 +5128,15 @@ function renderWarehouseSitesView() {
   if (!body) return;
   const items = warehouseSitesData.items || [];
 
+  // Sites only — exclude the WAREHOUSE pseudo-hotel
+  const siteHotels = ALL_HOTELS.filter(h => h.code !== 'WAREHOUSE');
+
   // Group by hotel; for each hotel split into out/low/ok
   const byHotel = {};
-  ALL_HOTELS.forEach(h => { byHotel[h.id] = { out: [], low: [], ok: [] }; });
+  siteHotels.forEach(h => { byHotel[h.id] = { out: [], low: [], ok: [] }; });
   items.forEach(it => {
     const bucket = byHotel[it.hotel_id];
-    if (!bucket) return;
+    if (!bucket) return;   // warehouse items are not in byHotel → skipped
     const qty = Number(it.quantity) || 0;
     const min = Number(it.min_stock) || 0;
     if (qty <= 0) bucket.out.push(it);
@@ -5140,14 +5144,14 @@ function renderWarehouseSitesView() {
     else bucket.ok.push(it);
   });
 
-  // Headline stats
-  const totalHotels = ALL_HOTELS.length;
-  const totalOut = ALL_HOTELS.reduce((s, h) => s + byHotel[h.id].out.length, 0);
-  const totalLow = ALL_HOTELS.reduce((s, h) => s + byHotel[h.id].low.length, 0);
+  // Headline stats (sites only)
+  const totalHotels = siteHotels.length;
+  const totalOut = siteHotels.reduce((s, h) => s + byHotel[h.id].out.length, 0);
+  const totalLow = siteHotels.reduce((s, h) => s + byHotel[h.id].low.length, 0);
 
   const headline = `
     <div class="stats-grid" style="margin-bottom:10px;">
-      <div class="stat-card"><div class="stat-value">${totalHotels}</div><div class="stat-label">Hotels</div></div>
+      <div class="stat-card"><div class="stat-value">${totalHotels}</div><div class="stat-label">Sites</div></div>
       <div class="stat-card" style="${totalOut > 0 ? 'border-color:#dc2626;' : ''}"><div class="stat-value" style="color:${totalOut > 0 ? '#dc2626' : 'inherit'};">${totalOut}</div><div class="stat-label">Out of stock</div></div>
       <div class="stat-card" style="${totalLow > 0 ? 'border-color:#f59e0b;' : ''}"><div class="stat-value" style="color:${totalLow > 0 ? '#f59e0b' : 'inherit'};">${totalLow}</div><div class="stat-label">Low stock</div></div>
     </div>
@@ -5162,8 +5166,8 @@ function renderWarehouseSitesView() {
       </button>
     </div>`;
 
-  // One card per hotel
-  const hotelCards = ALL_HOTELS.map(h => {
+  // One card per site hotel
+  const hotelCards = siteHotels.map(h => {
     const { out, low, ok } = byHotel[h.id];
     if (!out.length && !low.length) {
       return `<div class="card" style="padding:14px;">
@@ -5217,9 +5221,10 @@ function renderWarehouseSitesView() {
 }
 
 async function downloadLowStockExcel() {
-  const items = warehouseSitesData.items || [];
+  const whId = getWarehouseHotelId();
+  const items = (warehouseSitesData.items || []).filter(i => i.hotel_id !== whId); // exclude warehouse
   if (!items.length) { toast('Nothing loaded yet — tap Refresh first', 'warning'); return; }
-  const hotelById = {}; ALL_HOTELS.forEach(h => { hotelById[h.id] = h; });
+  const hotelById = {}; ALL_HOTELS.filter(h => h.code !== 'WAREHOUSE').forEach(h => { hotelById[h.id] = h; });
   const lowOrOut = items.filter(i => (Number(i.quantity) || 0) <= (Number(i.min_stock) || 0));
   if (!lowOrOut.length) { toast('Every hotel is fully stocked — nothing to order', 'success'); return; }
 
@@ -5286,9 +5291,10 @@ async function downloadLowStockExcel() {
 
 function downloadLowStockPDF() {
   if (!window.jspdf || !window.jspdf.jsPDF) { toast('PDF library not loaded yet', 'error'); return; }
-  const items = warehouseSitesData.items || [];
+  const whId = getWarehouseHotelId();
+  const items = (warehouseSitesData.items || []).filter(i => i.hotel_id !== whId);
   if (!items.length) { toast('Nothing loaded yet — tap Refresh first', 'warning'); return; }
-  const hotelById = {}; ALL_HOTELS.forEach(h => { hotelById[h.id] = h; });
+  const hotelById = {}; ALL_HOTELS.filter(h => h.code !== 'WAREHOUSE').forEach(h => { hotelById[h.id] = h; });
   const lowOrOut = items.filter(i => (Number(i.quantity) || 0) <= (Number(i.min_stock) || 0));
   if (!lowOrOut.length) { toast('Every hotel is fully stocked — nothing to order', 'success'); return; }
 
@@ -5675,6 +5681,21 @@ async function confirmSendToSite() {
 
   const totalUnits = lines.reduce((s, l) => s + l.qty, 0);
 
+  // 0. Fetch the target hotel's items so we can resolve the correct item IDs.
+  //    Warehouse UUIDs ≠ hotel UUIDs for the same product — we match by product_code then name.
+  const { data: siteItems } = await sb.from('items').select('id, name, product_code').eq('hotel_id', targetHotelId);
+  const norm = s => (s || '').trim().toLowerCase();
+  function resolveHotelItemId(warehouseItem) {
+    // 1. product_code match (most reliable — both share the same codes from the CSV)
+    if (warehouseItem.product_code) {
+      const hit = (siteItems || []).find(x => x.product_code && norm(x.product_code) === norm(warehouseItem.product_code));
+      if (hit) return hit.id;
+    }
+    // 2. name match
+    const hit2 = (siteItems || []).find(x => norm(x.name) === norm(warehouseItem.name));
+    return hit2 ? hit2.id : null;
+  }
+
   // 1. Deduct from warehouse immediately
   let failed = 0;
   for (const { item, qty } of lines) {
@@ -5687,16 +5708,24 @@ async function confirmSendToSite() {
     }
   }
 
-  // 2. Create a pending delivery for the target hotel
-  //    (Hotel ASM approves → their item quantities increase via existing approval flow)
-  const deliveryLines = lines.map(l => ({
-    id: l.item.id,                          // warehouse UUID (used as hint; hotel will re-match)
-    product_code: l.item.product_code || '', // key for cross-hotel matching
-    name: l.item.name,
-    category: l.item.category || '',
-    unit: l.item.unit || '',
-    qty: l.qty
-  }));
+  // 2. Build delivery lines using the TARGET HOTEL's item IDs.
+  //    This ensures applyDeliverySubmission's first match (by id) works perfectly.
+  const unmatched = [];
+  const deliveryLines = lines.map(l => {
+    const hotelItemId = resolveHotelItemId(l.item);
+    if (!hotelItemId) unmatched.push(l.item.name);
+    return {
+      id: hotelItemId || l.item.id,          // hotel UUID if found, warehouse UUID as fallback
+      product_code: l.item.product_code || '',
+      name: l.item.name,
+      category: l.item.category || '',
+      unit: l.item.unit || '',
+      qty: l.qty
+    };
+  });
+  if (unmatched.length) {
+    console.warn('[send-to-site] Could not match to site items (will use name fallback):', unmatched);
+  }
 
   const payload = {
     submitted_by: (currentUser && currentUser.email) || 'warehouse',
