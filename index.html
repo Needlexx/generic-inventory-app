@@ -379,6 +379,42 @@ select.form-control {
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
 
+/* ========== PDF FULLSCREEN LIGHTBOX ========== */
+#pdfPreviewOverlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0, 0, 0, 0.93);
+  backdrop-filter: blur(10px) saturate(0.4);
+  -webkit-backdrop-filter: blur(10px) saturate(0.4);
+  z-index: 1000;
+  flex-direction: column;
+  animation: fadeIn 0.18s ease;
+}
+#pdfPreviewTopbar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px; flex-shrink: 0;
+  background: rgba(255,255,255,0.06);
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+}
+#pdfPreviewTitle {
+  flex: 1; color: rgba(255,255,255,0.88);
+  font-size: 0.8rem; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  letter-spacing: 0.01em;
+}
+#pdfPreviewCloseBtn {
+  flex-shrink: 0; width: 30px; height: 30px;
+  background: rgba(255,255,255,0.12); border: none; border-radius: 50%;
+  color: white; font-size: 1.1rem; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: background 0.15s;
+}
+#pdfPreviewCloseBtn:hover { background: rgba(255,255,255,0.25); }
+#pdfPreviewBottombar {
+  display: flex; gap: 10px; padding: 12px 16px; flex-shrink: 0;
+  background: rgba(255,255,255,0.06);
+  border-top: 1px solid rgba(255,255,255,0.1);
+}
+
 /* ========== CAMERA ZONE ========== */
 .camera-zone {
   position: relative;
@@ -1224,6 +1260,23 @@ select.form-control {
   </div>
 </main>
 
+<!-- ===== PDF FULLSCREEN LIGHTBOX ===== -->
+<div id="pdfPreviewOverlay" style="display:none;" role="dialog" aria-modal="true" aria-label="PDF Preview">
+  <div id="pdfPreviewTopbar">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.7)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+    <span id="pdfPreviewTitle"></span>
+    <button id="pdfPreviewCloseBtn" onclick="closePDFPreview()" title="Close">&times;</button>
+  </div>
+  <iframe id="pdfPreviewFrame" src="" style="flex:1; min-height:0; width:100%; border:none; display:block;" title="PDF preview"></iframe>
+  <div id="pdfPreviewBottombar">
+    <button class="btn btn-outline" style="flex:1; color:rgba(255,255,255,0.85); border-color:rgba(255,255,255,0.25); background:rgba(255,255,255,0.08);" onclick="closePDFPreview()">Close</button>
+    <button class="btn btn-primary" style="flex:1;" onclick="downloadPreviewedPDF()">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="vertical-align:middle; margin-right:4px;"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      Download PDF
+    </button>
+  </div>
+</div>
+
 <!-- ===== MODAL ===== -->
 <div class="modal-overlay" id="modalOverlay" style="display:none;" onclick="if(event.target===this)closeModal()">
   <div class="modal-content" id="modalContent"></div>
@@ -1269,7 +1322,7 @@ select.form-control {
    ================================================================= */
 // App version — bump alongside sw.js CACHE_NAME so ASM can verify which build
 // their device is actually running (shown under the email in the user menu).
-window.APP_VERSION = 'v61';
+window.APP_VERSION = 'v62';
 const SUPABASE_URL  = 'https://nogrnsjnwypihjaeulef.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5vZ3Juc2pud3lwaWhqYWV1bGVmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY0MDg2MzQsImV4cCI6MjA5MTk4NDYzNH0.ZxwsWtzzKO_nUSMQpH-FpbA2-5nYH8Nu1IegcKcYjW8';
 const PHOTO_BUCKET  = 'inventory-photos';
@@ -3333,6 +3386,10 @@ function toggleFridayReorderZip() {
 
 async function generateAllSitesReorderZip() {
   if (!isWarehouse()) return;
+  if (!window.jspdf || !window.jspdf.jsPDF) {
+    toast('PDF library not loaded yet — refresh and try again', 'error'); return;
+  }
+  const { jsPDF } = window.jspdf;
   const siteHotels = ALL_HOTELS.filter(h => h.code !== 'WAREHOUSE');
   if (siteHotels.length === 0) { toast('No site hotels found', 'warning'); return; }
 
@@ -3350,52 +3407,98 @@ async function generateAllSitesReorderZip() {
         .order('category').order('name');
       if (error) throw error;
 
-      // Items at or below min stock (also include anything with 0 stock)
+      // Items at or below min stock
       const lowItems = (items || []).filter(i => {
         const qty = Number(i.quantity) || 0;
         const min = Number(i.min_stock) || 0;
         return qty <= min;
       });
 
-      // Always include the sheet even if empty — so the site still gets a file
-      const wb = XLSX.utils.book_new();
-      const rows = [
-        [`${hotel.name} — Reorder Sheet`, `Generated: ${todayStr}`],
-        [],
-        ['Product Code', 'Item', 'Category', 'In Stock', 'Min Stock', 'Max Stock', 'To Order', 'Unit']
-      ];
-      let totalToOrder = 0;
-      lowItems.forEach(i => {
-        const qty = Number(i.quantity) || 0;
-        const max = Number(i.max_stock) || 20;
-        const toOrder = Math.max(0, max - qty);
-        totalToOrder += toOrder;
-        rows.push([
-          i.product_code || '',
-          i.name,
-          i.category || '',
-          qty,
-          Number(i.min_stock) || 0,
-          max,
-          toOrder,
-          i.unit || 'pcs'
-        ]);
-      });
+      // Build one PDF per hotel
+      const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
+
+      // Header
+      doc.setFontSize(15);
+      doc.setTextColor(30, 30, 30);
+      doc.text(`${hotel.name} — Reorder Sheet`, 40, 44);
+      doc.setFontSize(9);
+      doc.setTextColor(100);
+      doc.text(`Generated: ${todayStr}`, 40, 60);
+      doc.setTextColor(0);
+
       if (lowItems.length === 0) {
-        rows.push(['— No items below minimum stock —']);
+        doc.setFontSize(11);
+        doc.setTextColor(80);
+        doc.text('All items are fully stocked — nothing to reorder.', 40, 90);
+        doc.setTextColor(0);
       } else {
-        rows.push([]);
-        rows.push(['', '', '', '', '', 'TOTAL TO ORDER', totalToOrder, '']);
         sitesWithItems++;
+        let totalToOrder = 0;
+        const body = lowItems.map(i => {
+          const qty   = Number(i.quantity)  || 0;
+          const max   = Number(i.max_stock) || 20;
+          const toOrd = Math.max(0, max - qty);
+          totalToOrder += toOrd;
+          return [
+            i.product_code || '',
+            i.name,
+            i.category || '',
+            String(qty),
+            String(Number(i.min_stock) || 0),
+            String(max),
+            String(toOrd),
+            i.unit || 'pcs'
+          ];
+        });
+        // Summary row
+        body.push(['', '', '', '', '', 'TOTAL TO ORDER', String(totalToOrder), '']);
+
+        doc.autoTable({
+          startY: 74,
+          head: [['Code', 'Item', 'Category', 'In Stock', 'Min', 'Max', 'To Order', 'Unit']],
+          body,
+          styles:      { fontSize: 8, cellPadding: 3 },
+          headStyles:  { fillColor: [220, 38, 38] },
+          columnStyles: {
+            0: { cellWidth: 50 },
+            1: { cellWidth: 'auto' },
+            2: { cellWidth: 72 },
+            3: { cellWidth: 44, halign: 'center' },
+            4: { cellWidth: 36, halign: 'center' },
+            5: { cellWidth: 36, halign: 'center' },
+            6: { cellWidth: 50, halign: 'center' },
+            7: { cellWidth: 40 }
+          },
+          didDrawCell: (data) => {
+            // Highlight zero-stock cells in red
+            if (data.section === 'body' && data.column.index === 3) {
+              if (Number(data.cell.raw) === 0) {
+                data.cell.styles.textColor = [220, 38, 38];
+                data.cell.styles.fontStyle = 'bold';
+              }
+            }
+            // Bold the TOTAL row (last body row)
+            if (data.section === 'body' && data.row.index === body.length - 1) {
+              data.cell.styles.fontStyle = 'bold';
+            }
+          },
+          didDrawPage: (data) => {
+            const pageCount  = doc.internal.getNumberOfPages();
+            const pageSize   = doc.internal.pageSize;
+            const pageHeight = pageSize.height || pageSize.getHeight();
+            doc.setFontSize(8);
+            doc.setTextColor(130);
+            doc.text(`Page ${data.pageNumber} of ${pageCount}`, pageSize.width - 80, pageHeight - 16);
+            doc.text(`${hotel.name}  ·  SOS Property`, 40, pageHeight - 16);
+            doc.setTextColor(0);
+          }
+        });
       }
 
-      const ws = XLSX.utils.aoa_to_sheet(rows);
-      ws['!cols'] = [{wch:14},{wch:38},{wch:18},{wch:10},{wch:10},{wch:10},{wch:10},{wch:8}];
-      XLSX.utils.book_append_sheet(wb, ws, 'Reorder');
-
-      const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+      // Add PDF binary to ZIP
+      const buf = doc.output('arraybuffer');
       const safeHotelName = hotel.name.replace(/[^a-z0-9]/gi, '_').replace(/__+/g, '_');
-      zip.file(`${safeHotelName}_${todayISO}.xlsx`, buf);
+      zip.file(`${safeHotelName}_${todayISO}.pdf`, buf);
     }
 
     const blob = await zip.generateAsync({ type: 'blob' });
@@ -3407,7 +3510,7 @@ async function generateAllSitesReorderZip() {
     document.body.removeChild(a);
     URL.revokeObjectURL(a.href);
 
-    // Mark today so auto-trigger doesn't re-fire this session
+    // Mark today so the auto-trigger doesn't re-fire this session
     save(KEYS.fridayReorderZip, today());
     checkFridayReorderZip();
     toast(`Reorder ZIP ready — ${siteHotels.length} sites (${sitesWithItems} with low stock)`, 'success');
@@ -3999,8 +4102,9 @@ function _pdfFooter(doc, data) {
 }
 
 /* ------------------------------------------------------------------
-   PDF PREVIEW — shows the generated PDF in a modal iframe before
-   the user commits to downloading. Works in all modern browsers.
+   PDF PREVIEW — full-screen lightbox (dark backdrop, like Picasso).
+   Uses a dedicated #pdfPreviewOverlay element (not the bottom-sheet
+   modal) so the PDF fills the entire screen.
    ------------------------------------------------------------------ */
 let _previewDoc   = null;   // jsPDF instance kept alive for the Download button
 let _previewFile  = '';     // filename to use when the user taps Download
@@ -4011,7 +4115,7 @@ function previewPDF(doc, filename) {
   _previewFile = filename;
   if (_previewBlobUrl) { URL.revokeObjectURL(_previewBlobUrl); _previewBlobUrl = null; }
 
-  // Safari / iOS: blobUrl in iframe won't render — fall back to data URI
+  // Safari / iOS: blob URLs in iframes don't render — fall back to data URI
   const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
   let src;
   if (isSafari) {
@@ -4022,22 +4126,15 @@ function previewPDF(doc, filename) {
     src = _previewBlobUrl;
   }
 
-  openModal(`
-    <div class="modal-header" style="flex-shrink:0;">
-      <h3 style="font-size:0.95rem;">PDF Preview</h3>
-      <button class="modal-close" onclick="closePDFPreview()">&times;</button>
-    </div>
-    <div style="flex:1; min-height:0; margin:0 -16px; border-top:1px solid var(--border); border-bottom:1px solid var(--border);">
-      <iframe src="${src}" style="width:100%; height:62vh; border:none; display:block;"></iframe>
-    </div>
-    <div style="display:flex; gap:8px; padding-top:10px; flex-shrink:0;">
-      <button class="btn btn-outline" style="flex:1;" onclick="closePDFPreview()">Close</button>
-      <button class="btn btn-primary" style="flex:1;" onclick="downloadPreviewedPDF()">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="vertical-align:middle; margin-right:4px;"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-        Download PDF
-      </button>
-    </div>
-  `, { fullHeight: true });
+  const titleEl  = document.getElementById('pdfPreviewTitle');
+  const frameEl  = document.getElementById('pdfPreviewFrame');
+  const overlay  = document.getElementById('pdfPreviewOverlay');
+  if (titleEl)  titleEl.textContent = filename;
+  if (frameEl)  frameEl.src = src;
+  if (overlay) {
+    overlay.style.display        = 'flex';
+    overlay.style.flexDirection  = 'column';
+  }
 }
 
 function downloadPreviewedPDF() {
@@ -4048,9 +4145,12 @@ function downloadPreviewedPDF() {
 }
 
 function closePDFPreview() {
+  const overlay = document.getElementById('pdfPreviewOverlay');
+  const frameEl = document.getElementById('pdfPreviewFrame');
+  if (overlay) overlay.style.display = 'none';
+  if (frameEl) frameEl.src = '';       // free browser memory
   if (_previewBlobUrl) { URL.revokeObjectURL(_previewBlobUrl); _previewBlobUrl = null; }
   _previewDoc = null;
-  closeModal();
 }
 
 /* =================================================================
