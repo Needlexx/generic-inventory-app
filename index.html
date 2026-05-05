@@ -1183,6 +1183,25 @@ select.form-control {
       <p style="font-size:0.75rem; color:var(--text-light); margin-bottom:8px;">Data is retained for 56 days. Download a weekly ZIP (Excel + photos) before it expires.</p>
       <div id="archiveList"></div>
     </div>
+
+    <!-- === WAREHOUSE ONLY: All-Sites Reorder ZIP === -->
+    <div id="warehouseReorderSection" style="display:none; margin-top:20px;">
+      <div class="card">
+        <h3 style="font-size:0.95rem; margin-bottom:4px;">&#128203; All-Sites Reorder Sheets</h3>
+        <p style="font-size:0.75rem; color:var(--text-light); margin-bottom:10px; line-height:1.5;">
+          One Excel reorder sheet per site hotel (items at or below min stock), packaged into a single ZIP. Use this to place supplier orders for all sites at once.
+        </p>
+        <div id="fridayReorderBanner"></div>
+        <div style="display:flex; align-items:center; gap:8px; margin:8px 0 12px;">
+          <label style="font-size:0.85rem; font-weight:600; cursor:pointer;" for="fridayReorderToggle">Auto-generate every Friday at 12 PM</label>
+          <input type="checkbox" id="fridayReorderToggle" onchange="toggleFridayReorderZip()" style="width:18px; height:18px; accent-color:var(--primary);">
+        </div>
+        <button class="btn btn-primary btn-block" onclick="generateAllSitesReorderZip()" style="gap:6px;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Download Reorder ZIP Now
+        </button>
+      </div>
+    </div>
   </div>
 
   <!-- === SEND DELIVERY TAB (warehouse only) === -->
@@ -1250,7 +1269,7 @@ select.form-control {
    ================================================================= */
 // App version — bump alongside sw.js CACHE_NAME so ASM can verify which build
 // their device is actually running (shown under the email in the user menu).
-window.APP_VERSION = 'v60';
+window.APP_VERSION = 'v61';
 const SUPABASE_URL  = 'https://nogrnsjnwypihjaeulef.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5vZ3Juc2pud3lwaWhqYWV1bGVmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY0MDg2MzQsImV4cCI6MjA5MTk4NDYzNH0.ZxwsWtzzKO_nUSMQpH-FpbA2-5nYH8Nu1IegcKcYjW8';
 const PHOTO_BUCKET  = 'inventory-photos';
@@ -1382,6 +1401,10 @@ function applyRoleUI() {
     orgEl.innerHTML = name + '<span class="header-sub">Inventory</span>';
   }
 
+  // Warehouse-only Reports section
+  const warehouseReorderSection = document.getElementById('warehouseReorderSection');
+  if (warehouseReorderSection) warehouseReorderSection.style.display = warehouse ? '' : 'none';
+
   // Hotel switcher (warehouse role only)
   const hotelSwitch = document.getElementById('userMenuHotelSwitch');
   const hotelButtons = document.getElementById('userMenuHotelButtons');
@@ -1406,7 +1429,7 @@ function applyRoleUI() {
 /* =================================================================
    DATA LAYER
    ================================================================= */
-const KEYS = { items: 'inv_items', transactions: 'inv_transactions', settings: 'inv_settings', fridayReport: 'inv_friday_report', orphanSweep: 'inv_last_orphan_sweep', activeHotel: 'inv_active_hotel' };
+const KEYS = { items: 'inv_items', transactions: 'inv_transactions', settings: 'inv_settings', fridayReport: 'inv_friday_report', fridayReorderZip: 'inv_friday_reorder_zip', orphanSweep: 'inv_last_orphan_sweep', activeHotel: 'inv_active_hotel' };
 
 /* =================================================================
    MULTI-HOTEL STATE — populated after login from public.user_profiles
@@ -1498,7 +1521,7 @@ function getItems() { return load(KEYS.items) || []; }
 function saveItems(items) { save(KEYS.items, items); }
 function getTransactions() { return load(KEYS.transactions) || []; }
 function saveTransactions(txns) { save(KEYS.transactions, txns); }
-function getSettings() { return load(KEYS.settings) || { fridayAutoReport: false }; }
+function getSettings() { return load(KEYS.settings) || { fridayAutoReport: false, fridayReorderZip: false }; }
 function saveSettings(s) { save(KEYS.settings, s); }
 
 /* =================================================================
@@ -3211,12 +3234,15 @@ function downloadLowStockReport() {
 function initReports() {
   const settings = getSettings();
   document.getElementById('fridayToggle').checked = settings.fridayAutoReport || false;
+  const fridayReorderToggleEl = document.getElementById('fridayReorderToggle');
+  if (fridayReorderToggleEl) fridayReorderToggleEl.checked = settings.fridayReorderZip || false;
   if (!document.getElementById('reportFrom').value) {
     const d = new Date(); d.setDate(d.getDate() - 7);
     document.getElementById('reportFrom').value = d.toISOString().slice(0, 10);
     document.getElementById('reportTo').value = today();
   }
   checkFridayReport();
+  checkFridayReorderZip();
   // Apply visual active state to default selected report-type button
   selectReportType(currentReportType);
 }
@@ -3260,6 +3286,135 @@ function autoFridayReport() {
   downloadExcelReport();
   save(KEYS.fridayReport, today());
   checkFridayReport();
+}
+
+/* ------------------------------------------------------------------
+   WAREHOUSE — ALL-SITES REORDER ZIP
+   Generates one Excel reorder sheet per site hotel (items at/below
+   min stock) and bundles them into a single ZIP for download.
+   Auto-triggered on Friday at/after 12 PM when the toggle is on.
+   ------------------------------------------------------------------ */
+
+function checkFridayReorderZip() {
+  if (!isWarehouse()) return;
+  const settings = getSettings();
+  const banner = document.getElementById('fridayReorderBanner');
+  if (!banner) return;
+  const now = new Date();
+  const isFriday = now.getDay() === 5;   // 5 = Friday
+  const isPast12 = now.getHours() >= 12;
+
+  if (settings.fridayReorderZip && isFriday && isPast12) {
+    const lastZip = load(KEYS.fridayReorderZip);
+    if (lastZip !== today()) {
+      banner.innerHTML = `<div class="friday-banner" style="margin-bottom:10px;">&#128197; It's Friday after 12 PM! Auto-generating reorder ZIP...<button class="btn btn-sm btn-warning" onclick="generateAllSitesReorderZip()" style="margin-left:auto;">Download Now</button></div>`;
+      generateAllSitesReorderZip();
+    } else {
+      banner.innerHTML = `<div class="friday-banner" style="margin-bottom:10px;">&#9989; Friday reorder ZIP already generated today.</div>`;
+    }
+  } else if (settings.fridayReorderZip) {
+    if (isFriday && !isPast12) {
+      banner.innerHTML = `<div class="friday-banner" style="margin-bottom:10px;">&#128197; Auto reorder ZIP enabled — will generate at 12 PM today.</div>`;
+    } else {
+      banner.innerHTML = `<div class="friday-banner" style="margin-bottom:10px;">&#128197; Auto reorder ZIP enabled — generates every Friday at 12 PM.</div>`;
+    }
+  } else {
+    banner.innerHTML = '';
+  }
+}
+
+function toggleFridayReorderZip() {
+  const settings = getSettings();
+  settings.fridayReorderZip = document.getElementById('fridayReorderToggle').checked;
+  saveSettings(settings);
+  checkFridayReorderZip();
+  toast(settings.fridayReorderZip ? 'Friday reorder ZIP enabled' : 'Friday reorder ZIP disabled');
+}
+
+async function generateAllSitesReorderZip() {
+  if (!isWarehouse()) return;
+  const siteHotels = ALL_HOTELS.filter(h => h.code !== 'WAREHOUSE');
+  if (siteHotels.length === 0) { toast('No site hotels found', 'warning'); return; }
+
+  toast('Building reorder ZIP — fetching all sites…', 'info');
+  try {
+    const zip = new JSZip();
+    const todayStr = new Date().toLocaleDateString('en-GB');
+    const todayISO = new Date().toISOString().slice(0, 10);
+    let sitesWithItems = 0;
+
+    for (const hotel of siteHotels) {
+      const { data: items, error } = await sb
+        .from('items').select('*')
+        .eq('hotel_id', hotel.id)
+        .order('category').order('name');
+      if (error) throw error;
+
+      // Items at or below min stock (also include anything with 0 stock)
+      const lowItems = (items || []).filter(i => {
+        const qty = Number(i.quantity) || 0;
+        const min = Number(i.min_stock) || 0;
+        return qty <= min;
+      });
+
+      // Always include the sheet even if empty — so the site still gets a file
+      const wb = XLSX.utils.book_new();
+      const rows = [
+        [`${hotel.name} — Reorder Sheet`, `Generated: ${todayStr}`],
+        [],
+        ['Product Code', 'Item', 'Category', 'In Stock', 'Min Stock', 'Max Stock', 'To Order', 'Unit']
+      ];
+      let totalToOrder = 0;
+      lowItems.forEach(i => {
+        const qty = Number(i.quantity) || 0;
+        const max = Number(i.max_stock) || 20;
+        const toOrder = Math.max(0, max - qty);
+        totalToOrder += toOrder;
+        rows.push([
+          i.product_code || '',
+          i.name,
+          i.category || '',
+          qty,
+          Number(i.min_stock) || 0,
+          max,
+          toOrder,
+          i.unit || 'pcs'
+        ]);
+      });
+      if (lowItems.length === 0) {
+        rows.push(['— No items below minimum stock —']);
+      } else {
+        rows.push([]);
+        rows.push(['', '', '', '', '', 'TOTAL TO ORDER', totalToOrder, '']);
+        sitesWithItems++;
+      }
+
+      const ws = XLSX.utils.aoa_to_sheet(rows);
+      ws['!cols'] = [{wch:14},{wch:38},{wch:18},{wch:10},{wch:10},{wch:10},{wch:10},{wch:8}];
+      XLSX.utils.book_append_sheet(wb, ws, 'Reorder');
+
+      const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+      const safeHotelName = hotel.name.replace(/[^a-z0-9]/gi, '_').replace(/__+/g, '_');
+      zip.file(`${safeHotelName}_${todayISO}.xlsx`, buf);
+    }
+
+    const blob = await zip.generateAsync({ type: 'blob' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `All_Sites_Reorder_${todayISO}.zip`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
+
+    // Mark today so auto-trigger doesn't re-fire this session
+    save(KEYS.fridayReorderZip, today());
+    checkFridayReorderZip();
+    toast(`Reorder ZIP ready — ${siteHotels.length} sites (${sitesWithItems} with low stock)`, 'success');
+  } catch(e) {
+    console.error('[reorder zip] failed:', e);
+    toast('Error generating ZIP: ' + (e.message || e), 'error');
+  }
 }
 
 // Active report type — drives dispatcher in generateReport / downloadExcelReport / downloadPDFReport
@@ -3754,8 +3909,7 @@ function downloadPDFTransactionReport(from, to) {
     headStyles: { fillColor: [37, 99, 235] },
     didDrawPage: (data) => _pdfFooter(doc, data)
   });
-  doc.save(`Transaction_Report_${from}_to_${to}.pdf`);
-  toast('PDF report downloaded!', 'success');
+  previewPDF(doc, `Transaction_Report_${from}_to_${to}.pdf`);
 }
 
 async function downloadPDFDeliveryReport(from, to) {
@@ -3784,8 +3938,7 @@ async function downloadPDFDeliveryReport(from, to) {
     headStyles: { fillColor: [16, 185, 129] },
     didDrawPage: (data) => _pdfFooter(doc, data)
   });
-  doc.save(`Delivery_Report_${from}_to_${to}.pdf`);
-  toast('Delivery PDF downloaded!', 'success');
+  previewPDF(doc, `Delivery_Report_${from}_to_${to}.pdf`);
 }
 
 async function downloadPDFStockCountReport(from, to) {
@@ -3831,8 +3984,7 @@ async function downloadPDFStockCountReport(from, to) {
     },
     didDrawPage: (data) => _pdfFooter(doc, data)
   });
-  doc.save(`StockCount_Report_${from}_to_${to}.pdf`);
-  toast('Stock count PDF downloaded!', 'success');
+  previewPDF(doc, `StockCount_Report_${from}_to_${to}.pdf`);
 }
 
 function _pdfFooter(doc, data) {
@@ -3844,6 +3996,61 @@ function _pdfFooter(doc, data) {
   doc.text(`Page ${data.pageNumber} of ${pageCount}`, pageSize.width - 80, pageHeight - 20);
   doc.text('SOS Property Inventory', 40, pageHeight - 20);
   doc.setTextColor(0);
+}
+
+/* ------------------------------------------------------------------
+   PDF PREVIEW — shows the generated PDF in a modal iframe before
+   the user commits to downloading. Works in all modern browsers.
+   ------------------------------------------------------------------ */
+let _previewDoc   = null;   // jsPDF instance kept alive for the Download button
+let _previewFile  = '';     // filename to use when the user taps Download
+let _previewBlobUrl = null; // revoked on close
+
+function previewPDF(doc, filename) {
+  _previewDoc  = doc;
+  _previewFile = filename;
+  if (_previewBlobUrl) { URL.revokeObjectURL(_previewBlobUrl); _previewBlobUrl = null; }
+
+  // Safari / iOS: blobUrl in iframe won't render — fall back to data URI
+  const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+  let src;
+  if (isSafari) {
+    src = doc.output('datauristring');
+  } else {
+    const blob = doc.output('blob');
+    _previewBlobUrl = URL.createObjectURL(blob);
+    src = _previewBlobUrl;
+  }
+
+  openModal(`
+    <div class="modal-header" style="flex-shrink:0;">
+      <h3 style="font-size:0.95rem;">PDF Preview</h3>
+      <button class="modal-close" onclick="closePDFPreview()">&times;</button>
+    </div>
+    <div style="flex:1; min-height:0; margin:0 -16px; border-top:1px solid var(--border); border-bottom:1px solid var(--border);">
+      <iframe src="${src}" style="width:100%; height:62vh; border:none; display:block;"></iframe>
+    </div>
+    <div style="display:flex; gap:8px; padding-top:10px; flex-shrink:0;">
+      <button class="btn btn-outline" style="flex:1;" onclick="closePDFPreview()">Close</button>
+      <button class="btn btn-primary" style="flex:1;" onclick="downloadPreviewedPDF()">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="vertical-align:middle; margin-right:4px;"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Download PDF
+      </button>
+    </div>
+  `, { fullHeight: true });
+}
+
+function downloadPreviewedPDF() {
+  if (_previewDoc) {
+    _previewDoc.save(_previewFile);
+    toast('PDF saved!', 'success');
+  }
+}
+
+function closePDFPreview() {
+  if (_previewBlobUrl) { URL.revokeObjectURL(_previewBlobUrl); _previewBlobUrl = null; }
+  _previewDoc = null;
+  closeModal();
 }
 
 /* =================================================================
@@ -5627,8 +5834,7 @@ function downloadLowStockPDF() {
   });
 
   const today = new Date().toISOString().slice(0, 10);
-  doc.save(`LowStock_All_Hotels_${today}.pdf`);
-  toast('Low stock PDF downloaded', 'success');
+  previewPDF(doc, `LowStock_All_Hotels_${today}.pdf`);
 }
 
 /* ---------- Warehouse view: James's central inventory ---------- */
