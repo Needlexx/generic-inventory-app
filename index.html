@@ -1250,7 +1250,7 @@ select.form-control {
    ================================================================= */
 // App version — bump alongside sw.js CACHE_NAME so ASM can verify which build
 // their device is actually running (shown under the email in the user menu).
-window.APP_VERSION = 'v58';
+window.APP_VERSION = 'v59';
 const SUPABASE_URL  = 'https://nogrnsjnwypihjaeulef.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5vZ3Juc2pud3lwaWhqYWV1bGVmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY0MDg2MzQsImV4cCI6MjA5MTk4NDYzNH0.ZxwsWtzzKO_nUSMQpH-FpbA2-5nYH8Nu1IegcKcYjW8';
 const PHOTO_BUCKET  = 'inventory-photos';
@@ -2992,119 +2992,177 @@ function renderDashboard() {
    Shows a grid of hotel cards (sites only). Each card is collapsible
    to reveal the items that are low or out of stock at that site.
    ------------------------------------------------------------------ */
-let whDashExpanded = {};   // hotelId → true/false
+/* ------------------------------------------------------------------
+   WAREHOUSE DASHBOARD — distribution planning view.
+   Shows every warehouse product with:
+     • Current warehouse qty
+     • Total needed across all sites (to fill to max_stock)
+     • Can send now (warehouse qty minus 20% emergency reserve)
+     • Emergency reserve (20% kept back for urgent requests)
+     • SHORT badge if warehouse can't cover all site needs
+   ------------------------------------------------------------------ */
+const WH_EMERGENCY_PCT = 0.20;   // 20% of warehouse stock reserved for emergencies
 
 async function renderWarehouseDashboard() {
-  // Hide the pie chart card — warehouse has its own layout
   const chartCard = document.querySelector('#pageDashboard .card');
   if (chartCard) chartCard.style.display = 'none';
   if (dashChart) { dashChart.destroy(); dashChart = null; }
 
   const statsEl = document.getElementById('dashStats');
   const alertEl = document.getElementById('dashAlerts');
-  statsEl.innerHTML = '<div style="text-align:center; padding:20px; color:var(--text-light);"><span class="spinner" style="margin-right:8px;"></span> Loading site stock…</div>';
+  statsEl.innerHTML = '<div style="text-align:center; padding:20px; color:var(--text-light);"><span class="spinner" style="margin-right:8px;"></span> Loading warehouse data…</div>';
   alertEl.innerHTML = '';
 
-  // Fetch all site items (warehouse RLS bypasses hotel filter)
-  const siteHotels = ALL_HOTELS.filter(h => h.code !== 'WAREHOUSE');
-  const siteIds = siteHotels.map(h => h.id);
-  const { data: allItems, error } = await sb.from('items').select('*').in('hotel_id', siteIds).order('name');
-  if (error) {
-    statsEl.innerHTML = `<div class="card" style="color:var(--danger); padding:16px;">Could not load: ${esc(error.message)}</div>`;
+  const whId = getWarehouseHotelId();
+  if (!whId) {
+    statsEl.innerHTML = '<div class="card" style="color:var(--danger); padding:16px;">Warehouse not configured. Run import-warehouse-products.sql first.</div>';
     return;
   }
 
-  // Group by hotel
-  const byHotel = {};
-  siteHotels.forEach(h => { byHotel[h.id] = { out: [], low: [], ok: [] }; });
-  (allItems || []).forEach(it => {
-    const b = byHotel[it.hotel_id]; if (!b) return;
-    const qty = Number(it.quantity) || 0;
-    const min = Number(it.min_stock) || 0;
-    if (qty <= 0) b.out.push(it);
-    else if (min > 0 && qty <= min) b.low.push(it);
-    else b.ok.push(it);
+  const siteIds = ALL_HOTELS.filter(h => h.code !== 'WAREHOUSE').map(h => h.id);
+
+  // Fetch warehouse items + all site items in parallel
+  const [whRes, siteRes] = await Promise.all([
+    sb.from('items').select('*').eq('hotel_id', whId).order('category').order('name'),
+    siteIds.length ? sb.from('items').select('id,name,product_code,quantity,min_stock,max_stock,hotel_id').in('hotel_id', siteIds) : Promise.resolve({ data: [], error: null })
+  ]);
+
+  if (whRes.error) {
+    statsEl.innerHTML = `<div class="card" style="color:var(--danger); padding:16px;">Could not load: ${esc(whRes.error.message)}</div>`;
+    return;
+  }
+
+  const whItems = whRes.data || [];
+  const siteItems = siteRes.data || [];
+  const norm = s => (s || '').trim().toLowerCase();
+
+  // Build distribution plan per warehouse item
+  const plan = whItems.map(wi => {
+    const whQty     = Number(wi.quantity) || 0;
+    const emergency = Math.ceil(whQty * WH_EMERGENCY_PCT);
+    const available = Math.max(0, whQty - emergency);
+
+    // Match site items by product_code then name
+    const matches = siteItems.filter(si =>
+      (wi.product_code && si.product_code && norm(wi.product_code) === norm(si.product_code)) ||
+      norm(si.name) === norm(wi.name)
+    );
+    const sitesNeed = matches.reduce((s, si) => {
+      const qty = Number(si.quantity) || 0;
+      const max = Number(si.max_stock) || 20;
+      return s + Math.max(0, max - qty);
+    }, 0);
+
+    const canSend      = Math.min(available, sitesNeed);
+    const afterSending = whQty - canSend;
+    const shortfall    = Math.max(0, sitesNeed - available);
+
+    return { wi, whQty, emergency, available, sitesNeed, canSend, afterSending, shortfall };
   });
 
-  const totalOut = siteHotels.reduce((s, h) => s + byHotel[h.id].out.length, 0);
-  const totalLow = siteHotels.reduce((s, h) => s + byHotel[h.id].low.length, 0);
-  const totalProducts = siteHotels.reduce((s, h) => s + byHotel[h.id].out.length + byHotel[h.id].low.length + byHotel[h.id].ok.length, 0);
+  // Summary totals
+  const totalUnits    = plan.reduce((s, r) => s + r.whQty, 0);
+  const totalCanSend  = plan.reduce((s, r) => s + r.canSend, 0);
+  const totalEmergency= plan.reduce((s, r) => s + r.emergency, 0);
+  const totalShort    = plan.filter(r => r.shortfall > 0).length;
 
   statsEl.innerHTML = `
     <div class="stats-grid" style="margin-bottom:10px;">
-      <div class="stat-card"><div class="stat-value">${siteHotels.length}</div><div class="stat-label">Sites</div></div>
-      <div class="stat-card"><div class="stat-value">${totalProducts}</div><div class="stat-label">Total Products</div></div>
-      <div class="stat-card" style="${totalOut > 0 ? 'border-color:#dc2626;' : ''}">
-        <div class="stat-value" style="color:${totalOut > 0 ? '#dc2626' : 'inherit'};">${totalOut}</div>
-        <div class="stat-label">Out of Stock</div>
+      <div class="stat-card">
+        <div class="stat-value">${whItems.length}</div>
+        <div class="stat-label">Products</div>
       </div>
-      <div class="stat-card" style="${totalLow > 0 ? 'border-color:#f59e0b;' : ''}">
-        <div class="stat-value" style="color:${totalLow > 0 ? '#f59e0b' : 'inherit'};">${totalLow}</div>
-        <div class="stat-label">Low Stock</div>
+      <div class="stat-card">
+        <div class="stat-value">${totalUnits.toLocaleString()}</div>
+        <div class="stat-label">In Warehouse</div>
       </div>
+      <div class="stat-card" style="border-color:#2563eb;">
+        <div class="stat-value" style="color:#2563eb;">${totalCanSend.toLocaleString()}</div>
+        <div class="stat-label">Can Send Now</div>
+      </div>
+      <div class="stat-card" style="border-color:#16a34a;">
+        <div class="stat-value" style="color:#16a34a;">${totalEmergency.toLocaleString()}</div>
+        <div class="stat-label">Emergency Reserve</div>
+      </div>
+    </div>
+    ${totalShort > 0
+      ? `<div style="background:#fef3c7;border:1px solid #fbbf24;border-radius:8px;padding:10px 14px;margin-bottom:10px;font-size:0.82rem;color:#92400e;">
+           ⚠ <b>${totalShort} product${totalShort!==1?'s':''}</b> have insufficient warehouse stock to fully cover all site needs.
+         </div>`
+      : `<div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:8px 14px;margin-bottom:10px;font-size:0.8rem;color:#15803d;">
+           ✓ Warehouse can cover all current site needs (with 20% kept as emergency reserve).
+         </div>`
+    }`;
+
+  // Info note
+  const infoNote = `
+    <div style="font-size:0.7rem;color:var(--text-light);display:flex;align-items:center;gap:5px;margin-bottom:8px;">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+      <b>Can Send</b> = warehouse qty minus 20% emergency reserve, capped at what sites actually need.
     </div>`;
 
-  // Hotel grid — 2 columns, each card collapsible
-  const cards = siteHotels.map(h => {
-    const { out, low, ok } = byHotel[h.id];
-    const alertCount = out.length + low.length;
-    const isExpanded = !!whDashExpanded[h.id];
-    const statusColor = out.length > 0 ? '#dc2626' : low.length > 0 ? '#f59e0b' : '#16a34a';
-    const statusText = out.length > 0 ? `${out.length} out` : low.length > 0 ? `${low.length} low` : 'All stocked';
+  // Group by category
+  const byCategory = {};
+  plan.forEach(r => {
+    const cat = r.wi.category || 'Other';
+    if (!byCategory[cat]) byCategory[cat] = [];
+    byCategory[cat].push(r);
+  });
 
-    // Item rows (only shown when expanded)
-    const problemItems = [...out, ...low];
-    const itemRows = problemItems.map(i => {
-      const qty = Number(i.quantity) || 0;
-      const min = Number(i.min_stock) || 0;
-      const max = Number(i.max_stock) || Math.max(min * 2, 20);
-      const isOut = qty <= 0;
-      const dot = isOut ? '#dc2626' : '#f59e0b';
-      const need = Math.max(0, max - qty);
-      return `
-        <div style="display:grid; grid-template-columns:8px 1fr auto; gap:6px; align-items:start; padding:7px 12px; border-top:1px solid var(--border);">
-          <span style="display:inline-block; width:7px; height:7px; border-radius:50%; background:${dot}; margin-top:4px; flex-shrink:0;"></span>
-          <div style="min-width:0;">
-            <div style="font-size:0.8rem; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(i.name)}</div>
-            <div style="font-size:0.68rem; color:var(--text-light);">${esc(i.category||'')} · ${qty} ${esc(i.unit||'')}</div>
-          </div>
-          <div style="text-align:right; font-size:0.72rem; font-weight:700; color:${dot}; white-space:nowrap;">need ${need}</div>
-        </div>`;
-    }).join('');
-
-    const expandedSection = isExpanded ? `
-      <div id="whDashItems_${h.id}">
-        ${problemItems.length
-          ? itemRows + (ok.length > 0 ? `<div style="padding:6px 12px; font-size:0.7rem; color:var(--text-light); border-top:1px solid var(--border);">${ok.length} item${ok.length!==1?'s':''} fully stocked</div>` : '')
-          : `<div style="padding:10px 12px; font-size:0.8rem; color:var(--success); border-top:1px solid var(--border);">✓ All ${ok.length} items fully stocked</div>`
-        }
-      </div>` : '';
-
+  const itemRow = r => {
+    const pct = r.whQty > 0 ? Math.min(100, Math.round((r.canSend / r.whQty) * 100)) : 0;
+    const barColor = r.shortfall > 0 ? '#dc2626' : r.canSend > 0 ? '#2563eb' : '#e5e7eb';
+    const remainColor = r.afterSending <= r.emergency ? '#16a34a' : 'var(--text)';
     return `
-      <div class="card" style="padding:0; overflow:hidden; cursor:pointer;" onclick="toggleWhDashHotel('${h.id}')">
-        <div style="padding:12px 14px; display:flex; align-items:center; justify-content:space-between; gap:8px;">
-          <div style="min-width:0;">
-            <div style="font-weight:700; font-size:0.9rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(h.name)}</div>
-            <div style="font-size:0.7rem; color:var(--text-light); margin-top:2px;">${out.length + low.length + ok.length} products</div>
+      <div style="padding:10px 12px; border-bottom:1px solid var(--border);">
+        <div style="display:flex; justify-content:space-between; align-items:start; gap:6px; margin-bottom:6px;">
+          <div style="min-width:0; flex:1;">
+            <div style="font-weight:600; font-size:0.83rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+              ${esc(r.wi.name)}
+              ${r.shortfall > 0
+                ? `<span style="font-size:0.6rem;font-weight:800;color:#dc2626;background:#fee2e2;padding:1px 5px;border-radius:3px;margin-left:4px;">SHORT ${r.shortfall}</span>`
+                : ''}
+            </div>
+            <div style="font-size:0.67rem; color:var(--text-light);">${esc(r.wi.product_code||'')}${r.wi.product_code?' · ':''}${esc(r.wi.unit||'')}</div>
           </div>
-          <div style="display:flex; align-items:center; gap:6px; flex-shrink:0;">
-            <span style="font-size:0.72rem; font-weight:700; color:${statusColor};">${statusText}</span>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
-              style="transition:transform 0.2s; transform:rotate(${isExpanded ? '180' : '0'}deg); color:var(--text-light);">
-              <polyline points="6 9 12 15 18 9"/>
-            </svg>
+          <div style="text-align:right; font-size:0.78rem; flex-shrink:0;">
+            <span style="font-weight:700;">${r.whQty}</span>
+            <span style="color:var(--text-light);"> in WH</span>
           </div>
         </div>
-        ${expandedSection}
+        <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:5px; margin-bottom:6px;">
+          <div style="background:var(--bg); border-radius:6px; padding:5px 4px; text-align:center;">
+            <div style="font-size:0.78rem; font-weight:700; color:#2563eb;">${r.canSend}</div>
+            <div style="font-size:0.6rem; color:var(--text-light);">can send</div>
+          </div>
+          <div style="background:var(--bg); border-radius:6px; padding:5px 4px; text-align:center;">
+            <div style="font-size:0.78rem; font-weight:700; color:#16a34a;">${r.emergency}</div>
+            <div style="font-size:0.6rem; color:var(--text-light);">emergency</div>
+          </div>
+          <div style="background:var(--bg); border-radius:6px; padding:5px 4px; text-align:center;">
+            <div style="font-size:0.78rem; font-weight:700; color:${r.sitesNeed > 0 ? '#f59e0b' : 'var(--text-light)'};">${r.sitesNeed}</div>
+            <div style="font-size:0.6rem; color:var(--text-light);">sites need</div>
+          </div>
+          <div style="background:var(--bg); border-radius:6px; padding:5px 4px; text-align:center;">
+            <div style="font-size:0.78rem; font-weight:700; color:${remainColor};">${r.afterSending}</div>
+            <div style="font-size:0.6rem; color:var(--text-light);">after send</div>
+          </div>
+        </div>
+        <div style="background:var(--border); border-radius:4px; height:4px; overflow:hidden;">
+          <div style="background:${barColor}; height:100%; width:${pct}%;"></div>
+        </div>
       </div>`;
-  }).join('');
+  };
 
-  alertEl.innerHTML = `<div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:4px;">${cards}</div>`;
-}
+  const categoryBlocks = Object.keys(byCategory).sort().map(cat => `
+    <div style="padding:5px 12px; font-size:0.68rem; font-weight:700; color:var(--text-light); text-transform:uppercase; letter-spacing:0.08em; background:var(--bg); border-bottom:1px solid var(--border);">${esc(cat)}</div>
+    ${byCategory[cat].map(itemRow).join('')}`
+  ).join('');
 
-function toggleWhDashHotel(hotelId) {
-  whDashExpanded[hotelId] = !whDashExpanded[hotelId];
-  renderWarehouseDashboard();
+  alertEl.innerHTML = infoNote + `
+    <div class="card" style="padding:0; overflow:hidden;">
+      ${categoryBlocks || '<div style="padding:24px; text-align:center; color:var(--text-light);">No warehouse items found. Import products first.</div>'}
+    </div>`;
 }
 
 function downloadLowStockReport() {
@@ -5021,6 +5079,10 @@ let sdExpandedHotels = {};
 // Last loaded data so toggling cards doesn't hit the network again
 let sdLastItems = [];
 let sdLastPending = [];
+// Warehouse qty lookup by product_code (normalised) → quantity, for live preview
+// Also keyed by name fallback. Built when loadSendDeliveryTab fetches warehouse items.
+let sdWarehouseQtyByCode = {};   // norm(product_code) → whQty
+let sdWarehouseQtyByName = {};   // norm(name) → whQty
 
 async function loadSendDeliveryTab() {
   if (!isWarehouse()) {
@@ -5031,13 +5093,24 @@ async function loadSendDeliveryTab() {
   const container = document.getElementById('sendDeliveryContent');
   container.innerHTML = '<div style="text-align:center; padding:28px; color:var(--text-light);"><span class="spinner" style="margin-right:8px;"></span> Loading site stock…</div>';
   try {
-    const { data: items, error } = await sb.from('items').select('*').order('name');
-    if (error) throw error;
-    const { data: pending, error: e2 } = await sb.from('deliveries')
-      .select('hotel_id, items, status').eq('status', 'pending');
-    if (e2) console.warn('[send-delivery] pending fetch failed:', e2);
-    sdLastItems = items || [];
-    sdLastPending = pending || [];
+    const whId = getWarehouseHotelId();
+    const [itemsRes, pendingRes, whRes] = await Promise.all([
+      sb.from('items').select('*').order('name'),
+      sb.from('deliveries').select('hotel_id, items, status').eq('status', 'pending'),
+      whId ? sb.from('items').select('name, product_code, quantity').eq('hotel_id', whId) : Promise.resolve({ data: [] })
+    ]);
+    if (itemsRes.error) throw itemsRes.error;
+    // Build warehouse qty lookup maps for live "after sending" preview
+    const norm = s => (s || '').trim().toLowerCase();
+    sdWarehouseQtyByCode = {};
+    sdWarehouseQtyByName = {};
+    (whRes.data || []).forEach(wi => {
+      const qty = Number(wi.quantity) || 0;
+      if (wi.product_code) sdWarehouseQtyByCode[norm(wi.product_code)] = qty;
+      sdWarehouseQtyByName[norm(wi.name)] = qty;
+    });
+    sdLastItems = itemsRes.data || [];
+    sdLastPending = pendingRes.data || [];
     renderSendDeliveryTab(sdLastItems, sdLastPending);
   } catch(e) {
     console.error('[send-delivery] load failed:', e);
@@ -5132,8 +5205,18 @@ function renderSendDeliveryTab(allItems, pending) {
           const badge = isOut
             ? `<span style="font-size:0.6rem;font-weight:800;color:#dc2626;background:#fee2e2;padding:1px 4px;border-radius:3px;margin-left:3px;">OUT</span>`
             : `<span style="font-size:0.6rem;font-weight:800;color:#92400e;background:#fef3c7;padding:1px 4px;border-radius:3px;margin-left:3px;">LOW</span>`;
+          // Warehouse stock for this item (for live preview)
+          const norm_pc = (i.product_code||'').trim().toLowerCase();
+          const norm_nm = (i.name||'').trim().toLowerCase();
+          const whQty = (norm_pc && sdWarehouseQtyByCode[norm_pc] != null)
+            ? sdWarehouseQtyByCode[norm_pc]
+            : (sdWarehouseQtyByName[norm_nm] != null ? sdWarehouseQtyByName[norm_nm] : null);
+          const whAfter = whQty != null ? Math.max(0, whQty - draftQty) : null;
+          const whPreviewHtml = whQty != null
+            ? `<div id="sdwhprev_${key}" style="font-size:0.65rem;color:var(--text-light);text-align:right;margin-top:2px;">WH: <b>${whQty}</b> → <b style="color:${whAfter<=0?'#dc2626':whAfter<(whQty*0.2)?'#f59e0b':'#16a34a'};">${whAfter}</b></div>`
+            : '';
           return `
-            <div style="display:grid;grid-template-columns:20px 1fr 62px;gap:8px;align-items:center;padding:9px 12px;border-top:1px solid var(--border);">
+            <div style="display:grid;grid-template-columns:20px 1fr auto;gap:8px;align-items:center;padding:9px 12px;border-top:1px solid var(--border);">
               <input type="checkbox" id="sd_${key}"
                 ${draftQty > 0 ? 'checked' : ''}
                 onchange="toggleSendDeliveryRow('${h.id}','${i.id}',this.checked,${recommend})"
@@ -5143,14 +5226,17 @@ function renderSendDeliveryTab(allItems, pending) {
                   ${esc(i.name)}${badge}
                 </div>
                 <div style="font-size:0.68rem;color:var(--text-light);">
-                  ${esc(i.category||'')} · ${qty}/${max} ${esc(i.unit||'')}
+                  ${esc(i.category||'')} · site: ${qty}/${max} ${esc(i.unit||'')}
                   ${inFlight > 0 ? `<span style="color:#2563eb;">· ${inFlight} pending</span>` : ''}
                 </div>
               </div>
-              <input type="number" inputmode="numeric" min="0" step="1" value="${draftQty}"
-                id="sdqty_${key}"
-                onchange="setSendDeliveryQty('${h.id}','${i.id}',this.value)"
-                style="width:100%;padding:5px 6px;text-align:right;border:1px solid var(--border);border-radius:6px;font-size:0.85rem;">
+              <div style="min-width:60px;">
+                <input type="number" inputmode="numeric" min="0" step="1" value="${draftQty}"
+                  id="sdqty_${key}"
+                  onchange="setSendDeliveryQty('${h.id}','${i.id}',this.value,${whQty != null ? whQty : -1})"
+                  style="width:60px;padding:5px 6px;text-align:right;border:1px solid var(--border);border-radius:6px;font-size:0.85rem;">
+                ${whPreviewHtml}
+              </div>
             </div>`;
         }).join('');
 
@@ -5206,11 +5292,21 @@ function toggleSendDeliveryRow(hotelId, itemId, checked, recommend) {
   if (input) input.value = warehouseSendDraft[key] || 0;
 }
 
-function setSendDeliveryQty(hotelId, itemId, val) {
+function setSendDeliveryQty(hotelId, itemId, val, whQty) {
   const key = hotelId + '::' + itemId;
-  warehouseSendDraft[key] = Math.max(0, parseInt(val, 10) || 0);
+  const n = Math.max(0, parseInt(val, 10) || 0);
+  warehouseSendDraft[key] = n;
   const cb = document.getElementById('sd_' + key);
-  if (cb) cb.checked = warehouseSendDraft[key] > 0;
+  if (cb) cb.checked = n > 0;
+  // Live warehouse remaining preview
+  if (whQty >= 0) {
+    const prev = document.getElementById('sdwhprev_' + key);
+    if (prev) {
+      const after = Math.max(0, whQty - n);
+      const col = after <= 0 ? '#dc2626' : after < whQty * 0.2 ? '#f59e0b' : '#16a34a';
+      prev.innerHTML = `WH: <b>${whQty}</b> → <b style="color:${col};">${after}</b>`;
+    }
+  }
 }
 
 async function sendWarehouseDelivery(targetHotelId) {
@@ -5273,42 +5369,16 @@ async function sendWarehouseDelivery(targetHotelId) {
 
 /* =================================================================
    WAREHOUSE STOCK VIEW — replaces the Stock tab for the warehouse
-   role. Has two sub-modes: 'sites' (every hotel's low/out items)
-   and 'warehouse' (James's central inventory CRUD).
+   role. Shows warehouse inventory only (no sites toggle).
    ================================================================= */
-let warehouseStockMode = 'sites';                  // 'sites' | 'warehouse'
 let warehouseSitesData = { items: [], loading: false, error: null };
 let warehouseOwnItems = { items: [], loading: false, error: null };
 
 function renderWarehouseStockView() {
   const el = document.getElementById('stockList');
   if (!el) return;
-  el.innerHTML = `
-    <div class="card" style="padding:12px;">
-      <div style="display:grid; grid-template-columns: 1fr 1fr; gap:6px; margin-bottom:0;">
-        <button class="btn btn-outline" onclick="setWarehouseMode('sites')"
-          style="padding:10px 4px; ${warehouseStockMode === 'sites' ? 'background:var(--primary); color:#fff; border-color:var(--primary);' : ''}">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:middle; margin-right:4px;"><path d="M3 21h18M5 21V7l8-4 8 4v14M9 9v.01M9 12v.01M9 15v.01M9 18v.01"/></svg>
-          Sites view
-        </button>
-        <button class="btn btn-outline" onclick="setWarehouseMode('warehouse')"
-          style="padding:10px 4px; ${warehouseStockMode === 'warehouse' ? 'background:var(--primary); color:#fff; border-color:var(--primary);' : ''}">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:middle; margin-right:4px;"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/></svg>
-          Warehouse view
-        </button>
-      </div>
-    </div>
-    <div id="warehouseStockBody"></div>`;
-  if (warehouseStockMode === 'sites') {
-    loadWarehouseSitesView();
-  } else {
-    loadWarehouseOwnView();
-  }
-}
-
-function setWarehouseMode(mode) {
-  warehouseStockMode = mode;
-  renderWarehouseStockView();
+  el.innerHTML = '<div id="warehouseStockBody"></div>';
+  loadWarehouseOwnView();
 }
 
 /* ---------- Sites view: every hotel's low/out items ---------- */
