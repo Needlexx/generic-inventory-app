@@ -1250,7 +1250,7 @@ select.form-control {
    ================================================================= */
 // App version — bump alongside sw.js CACHE_NAME so ASM can verify which build
 // their device is actually running (shown under the email in the user menu).
-window.APP_VERSION = 'v57';
+window.APP_VERSION = 'v58';
 const SUPABASE_URL  = 'https://nogrnsjnwypihjaeulef.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5vZ3Juc2pud3lwaWhqYWV1bGVmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY0MDg2MzQsImV4cCI6MjA5MTk4NDYzNH0.ZxwsWtzzKO_nUSMQpH-FpbA2-5nYH8Nu1IegcKcYjW8';
 const PHOTO_BUCKET  = 'inventory-photos';
@@ -5008,8 +5008,19 @@ function clearDeliveryDraft() {
    ASM approval (which is what tops up that hotel's stock).
    ================================================================= */
 
+/* =================================================================
+   SEND DELIVERY TAB — collapsible hotel grid (2-column cards).
+   Each hotel tile shows name + alert count. Tap to expand the
+   item list with checkboxes + qty inputs + a Send button.
+   ================================================================= */
+
 // In-memory state for the send-delivery tab. Keyed by hotelId.itemId → qty.
 let warehouseSendDraft = {};
+// Which hotel cards are currently expanded in the Send Delivery grid
+let sdExpandedHotels = {};
+// Last loaded data so toggling cards doesn't hit the network again
+let sdLastItems = [];
+let sdLastPending = [];
 
 async function loadSendDeliveryTab() {
   if (!isWarehouse()) {
@@ -5018,17 +5029,16 @@ async function loadSendDeliveryTab() {
     return;
   }
   const container = document.getElementById('sendDeliveryContent');
-  container.innerHTML = '<div class="card" style="text-align:center; padding:24px; color:var(--text-light);"><span class="spinner" style="margin-right:8px;"></span> Loading restock list across all hotels…</div>';
+  container.innerHTML = '<div style="text-align:center; padding:28px; color:var(--text-light);"><span class="spinner" style="margin-right:8px;"></span> Loading site stock…</div>';
   try {
-    // Warehouse role bypasses RLS, so a single SELECT returns every hotel's items.
     const { data: items, error } = await sb.from('items').select('*').order('name');
     if (error) throw error;
-    // Also pull existing pending deliveries so we can mark items that already
-    // have a warehouse delivery in flight (avoids accidental duplicates).
     const { data: pending, error: e2 } = await sb.from('deliveries')
-      .select('hotel_id, items, submitted_by, status').eq('status', 'pending');
+      .select('hotel_id, items, status').eq('status', 'pending');
     if (e2) console.warn('[send-delivery] pending fetch failed:', e2);
-    renderSendDeliveryTab(items || [], pending || []);
+    sdLastItems = items || [];
+    sdLastPending = pending || [];
+    renderSendDeliveryTab(sdLastItems, sdLastPending);
   } catch(e) {
     console.error('[send-delivery] load failed:', e);
     container.innerHTML = `<div class="card" style="color:var(--danger); padding:16px;">Could not load: ${esc(e.message || 'unknown error')}</div>`;
@@ -5041,104 +5051,158 @@ function renderSendDeliveryTab(allItems, pending) {
     container.innerHTML = '<div class="card" style="color:var(--text-light); text-align:center; padding:24px;">No hotels found.</div>';
     return;
   }
-  // Group items by hotel_id. Only include items where current quantity is at
-  // or below min_stock (low + out of stock). Exclude the WAREHOUSE pseudo-hotel.
-  const siteHotelsOnly = ALL_HOTELS.filter(h => h.code !== 'WAREHOUSE');
+
+  const siteHotels = ALL_HOTELS.filter(h => h.code !== 'WAREHOUSE');
+
+  // Group low/out items by hotel
   const byHotel = {};
-  siteHotelsOnly.forEach(h => { byHotel[h.id] = []; });
+  siteHotels.forEach(h => { byHotel[h.id] = { out: [], low: [] }; });
   allItems.forEach(it => {
-    const min = Number(it.min_stock) || 0;
+    const g = byHotel[it.hotel_id]; if (!g) return;
     const qty = Number(it.quantity) || 0;
-    if (qty <= min) {
-      if (byHotel[it.hotel_id]) byHotel[it.hotel_id].push(it);
-    }
+    const min = Number(it.min_stock) || 0;
+    if (qty <= 0) g.out.push(it);
+    else if (min > 0 && qty <= min) g.low.push(it);
   });
-  // For each hotel build a "pending warehouse delivery" map of itemId → qty
-  // already in flight (any pending delivery, regardless of who submitted).
+
+  // Pending-in-flight map: hotelId → itemId → qty
   const pendingByHotel = {};
-  siteHotelsOnly.forEach(h => { pendingByHotel[h.id] = {}; });
+  siteHotels.forEach(h => { pendingByHotel[h.id] = {}; });
   (pending || []).forEach(d => {
     if (!pendingByHotel[d.hotel_id]) return;
-    (d.items || []).forEach(line => {
-      pendingByHotel[d.hotel_id][line.id] = (pendingByHotel[d.hotel_id][line.id] || 0) + (Number(line.qty) || 0);
+    (d.items || []).forEach(l => {
+      pendingByHotel[d.hotel_id][l.id] = (pendingByHotel[d.hotel_id][l.id] || 0) + (Number(l.qty) || 0);
     });
   });
 
-  const hotelCards = siteHotelsOnly.map(h => {
-    const items = byHotel[h.id] || [];
-    if (!items.length) {
-      return `<div class="card">
-        <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
-          <h3 style="font-size:0.95rem; margin:0;">${esc(h.name)}</h3>
-          <span style="font-size:0.72rem; color:var(--success); font-weight:700;">All stocked ✓</span>
-        </div>
-      </div>`;
-    }
-    const out = items.filter(i => (Number(i.quantity) || 0) <= 0).length;
-    const low = items.length - out;
-    const rows = items.map(i => {
-      const qty = Number(i.quantity) || 0;
-      const min = Number(i.min_stock) || 0;
-      const max = Number(i.max_stock) || (min * 2 || 20);
-      const recommend = Math.max(0, max - qty);
-      const draftKey = h.id + '::' + i.id;
-      const draftQty = warehouseSendDraft[draftKey] != null ? warehouseSendDraft[draftKey] : recommend;
-      const inFlight = pendingByHotel[h.id][i.id] || 0;
-      const isOut = qty <= 0;
-      const dotColor = isOut ? '#dc2626' : '#f59e0b';
-      const status = isOut ? 'Out' : 'Low';
-      return `
-        <div style="display:grid; grid-template-columns: 22px 1fr auto; gap:10px; align-items:center; padding:10px 12px; border-bottom:1px solid var(--border);">
-          <input type="checkbox" id="sd_${draftKey}" ${draftQty > 0 ? 'checked' : ''} onchange="toggleSendDeliveryRow('${h.id}','${i.id}', this.checked, ${recommend})" style="width:18px; height:18px; accent-color:var(--primary);">
-          <div style="min-width:0;">
-            <div style="font-weight:600; font-size:0.88rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
-              <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:${dotColor}; margin-right:6px; vertical-align:middle;"></span>
-              ${esc(i.name)}
-              <span style="font-size:0.66rem; color:${dotColor}; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; margin-left:4px;">${status}</span>
-            </div>
-            <div style="font-size:0.72rem; color:var(--text-light);">
-              ${esc(i.category || '')} · stock <b>${qty}</b> / ${max} ${esc(i.unit || '')}
-              ${inFlight > 0 ? `· <span style="color:#2563eb;">${inFlight} pending</span>` : ''}
-            </div>
-          </div>
-          <input type="number" inputmode="numeric" min="0" step="1"
-            value="${draftQty}"
-            onchange="setSendDeliveryQty('${h.id}','${i.id}', this.value)"
-            style="width:64px; padding:6px 8px; text-align:right; border:1px solid var(--border); border-radius:6px; font-size:0.88rem;">
-        </div>`;
-    }).join('');
-    return `<div class="card" style="padding:0; overflow:hidden;">
-      <div style="padding:12px 14px; background:var(--bg); border-bottom:1px solid var(--border);">
-        <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
-          <h3 style="font-size:0.95rem; margin:0;">${esc(h.name)}</h3>
-          <span style="font-size:0.72rem; color:var(--text-light);">
-            ${out > 0 ? `<b style="color:#dc2626;">${out} out</b> · ` : ''}<b style="color:#f59e0b;">${low} low</b>
-          </span>
-        </div>
+  // Overall stats
+  const totalOut = siteHotels.reduce((s, h) => s + byHotel[h.id].out.length, 0);
+  const totalLow = siteHotels.reduce((s, h) => s + byHotel[h.id].low.length, 0);
+
+  const stats = `
+    <div class="stats-grid" style="margin-bottom:10px;">
+      <div class="stat-card"><div class="stat-value">${siteHotels.length}</div><div class="stat-label">Sites</div></div>
+      <div class="stat-card" style="${totalOut > 0 ? 'border-color:#dc2626;' : ''}">
+        <div class="stat-value" style="color:${totalOut > 0 ? '#dc2626' : 'inherit'};">${totalOut}</div>
+        <div class="stat-label">Out of Stock</div>
       </div>
-      ${rows}
-      <div style="padding:10px 12px;">
-        <button class="btn btn-primary btn-block" onclick="sendWarehouseDelivery('${h.id}')">
-          Send selected to ${esc(h.name)}
-        </button>
+      <div class="stat-card" style="${totalLow > 0 ? 'border-color:#f59e0b;' : ''}">
+        <div class="stat-value" style="color:${totalLow > 0 ? '#f59e0b' : 'inherit'};">${totalLow}</div>
+        <div class="stat-label">Low Stock</div>
       </div>
     </div>`;
+
+  // 2-column grid of hotel cards
+  const cards = siteHotels.map(h => {
+    const { out, low } = byHotel[h.id];
+    const alertItems = [...out, ...low];
+    const isExpanded = !!sdExpandedHotels[h.id];
+    const alertCount = alertItems.length;
+    const statusColor = out.length > 0 ? '#dc2626' : low.length > 0 ? '#f59e0b' : '#16a34a';
+    const statusLabel = out.length > 0
+      ? `${out.length} out${low.length > 0 ? ` · ${low.length} low` : ''}`
+      : low.length > 0 ? `${low.length} low` : 'All stocked';
+
+    // Expanded item list (only rendered when open)
+    let expandedBody = '';
+    if (isExpanded) {
+      if (!alertItems.length) {
+        expandedBody = `<div style="padding:12px 14px; font-size:0.82rem; color:var(--success); border-top:1px solid var(--border);">✓ All items fully stocked — no shipment needed</div>`;
+      } else {
+        const draftTotal = alertItems.reduce((s, i) => {
+          const key = h.id + '::' + i.id;
+          return s + (warehouseSendDraft[key] != null ? warehouseSendDraft[key] : Math.max(0, (Number(i.max_stock) || 20) - (Number(i.quantity) || 0)));
+        }, 0);
+        const checkedCount = alertItems.filter(i => {
+          const key = h.id + '::' + i.id;
+          const d = warehouseSendDraft[key];
+          return d == null ? true : d > 0;
+        }).length;
+
+        const itemRows = alertItems.map(i => {
+          const qty = Number(i.quantity) || 0;
+          const min = Number(i.min_stock) || 0;
+          const max = Number(i.max_stock) || Math.max(min * 2, 20);
+          const recommend = Math.max(0, max - qty);
+          const key = h.id + '::' + i.id;
+          const draftQty = warehouseSendDraft[key] != null ? warehouseSendDraft[key] : recommend;
+          const inFlight = pendingByHotel[h.id][i.id] || 0;
+          const isOut = qty <= 0;
+          const dot = isOut ? '#dc2626' : '#f59e0b';
+          const badge = isOut
+            ? `<span style="font-size:0.6rem;font-weight:800;color:#dc2626;background:#fee2e2;padding:1px 4px;border-radius:3px;margin-left:3px;">OUT</span>`
+            : `<span style="font-size:0.6rem;font-weight:800;color:#92400e;background:#fef3c7;padding:1px 4px;border-radius:3px;margin-left:3px;">LOW</span>`;
+          return `
+            <div style="display:grid;grid-template-columns:20px 1fr 62px;gap:8px;align-items:center;padding:9px 12px;border-top:1px solid var(--border);">
+              <input type="checkbox" id="sd_${key}"
+                ${draftQty > 0 ? 'checked' : ''}
+                onchange="toggleSendDeliveryRow('${h.id}','${i.id}',this.checked,${recommend})"
+                style="width:16px;height:16px;accent-color:var(--primary);">
+              <div style="min-width:0;">
+                <div style="font-size:0.82rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+                  ${esc(i.name)}${badge}
+                </div>
+                <div style="font-size:0.68rem;color:var(--text-light);">
+                  ${esc(i.category||'')} · ${qty}/${max} ${esc(i.unit||'')}
+                  ${inFlight > 0 ? `<span style="color:#2563eb;">· ${inFlight} pending</span>` : ''}
+                </div>
+              </div>
+              <input type="number" inputmode="numeric" min="0" step="1" value="${draftQty}"
+                id="sdqty_${key}"
+                onchange="setSendDeliveryQty('${h.id}','${i.id}',this.value)"
+                style="width:100%;padding:5px 6px;text-align:right;border:1px solid var(--border);border-radius:6px;font-size:0.85rem;">
+            </div>`;
+        }).join('');
+
+        expandedBody = `
+          <div style="border-top:1px solid var(--border);">
+            ${itemRows}
+            <div style="padding:10px 12px;display:flex;gap:8px;align-items:center;border-top:1px solid var(--border);background:var(--bg);">
+              <span style="font-size:0.75rem;color:var(--text-light);flex:1;">${checkedCount} item${checkedCount!==1?'s':''} · ${draftTotal} units</span>
+              <button class="btn btn-primary" onclick="event.stopPropagation();sendWarehouseDelivery('${h.id}')"
+                style="padding:8px 14px;font-size:0.8rem;">
+                Send to ${esc(h.name.replace(/\b(Holiday Inn|Best Western|Wembley)\b/g, m => m === 'Wembley' ? m : m.split(' ')[0]))}
+              </button>
+            </div>
+          </div>`;
+      }
+    }
+
+    return `
+      <div class="card" style="padding:0;overflow:hidden;cursor:pointer;" onclick="toggleSdHotel('${h.id}')">
+        <div style="padding:13px 14px;display:flex;align-items:center;justify-content:space-between;gap:8px;">
+          <div style="min-width:0;">
+            <div style="font-weight:700;font-size:0.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(h.name)}</div>
+            <div style="font-size:0.7rem;color:var(--text-light);margin-top:2px;">${alertCount} need${alertCount!==1?'':'s'} restocking</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
+            <span style="font-size:0.72rem;font-weight:700;color:${statusColor};">${statusLabel}</span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+              style="transition:transform 0.2s;transform:rotate(${isExpanded?'180':'0'}deg);color:var(--text-light);">
+              <polyline points="6 9 12 15 18 9"/>
+            </svg>
+          </div>
+        </div>
+        ${expandedBody}
+      </div>`;
   }).join('');
 
-  container.innerHTML = hotelCards;
+  container.innerHTML = stats + `<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">${cards}</div>`;
+}
+
+function toggleSdHotel(hotelId) {
+  sdExpandedHotels[hotelId] = !sdExpandedHotels[hotelId];
+  // Re-render from cached data — no network hit needed just to toggle a card
+  renderSendDeliveryTab(sdLastItems, sdLastPending);
 }
 
 function toggleSendDeliveryRow(hotelId, itemId, checked, recommend) {
   const key = hotelId + '::' + itemId;
-  if (checked) {
-    warehouseSendDraft[key] = (warehouseSendDraft[key] != null && warehouseSendDraft[key] > 0)
-      ? warehouseSendDraft[key]
-      : recommend;
-  } else {
-    warehouseSendDraft[key] = 0;
-  }
-  // Update qty input value to reflect change
-  const input = document.querySelector(`input[onchange*="setSendDeliveryQty('${hotelId}','${itemId}'"]`);
+  warehouseSendDraft[key] = checked
+    ? ((warehouseSendDraft[key] != null && warehouseSendDraft[key] > 0) ? warehouseSendDraft[key] : recommend)
+    : 0;
+  // Cheap DOM patch: just update the qty input without a full re-render
+  const input = document.getElementById('sdqty_' + key);
   if (input) input.value = warehouseSendDraft[key] || 0;
 }
 
