@@ -1326,7 +1326,7 @@ select.form-control {
    ================================================================= */
 // App version — bump alongside sw.js CACHE_NAME so ASM can verify which build
 // their device is actually running (shown under the email in the user menu).
-window.APP_VERSION = 'v66';
+window.APP_VERSION = 'v67';
 const SUPABASE_URL  = 'https://nogrnsjnwypihjaeulef.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5vZ3Juc2pud3lwaWhqYWV1bGVmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY0MDg2MzQsImV4cCI6MjA5MTk4NDYzNH0.ZxwsWtzzKO_nUSMQpH-FpbA2-5nYH8Nu1IegcKcYjW8';
 const PHOTO_BUCKET  = 'inventory-photos';
@@ -7278,19 +7278,31 @@ async function asmCheckForDeliveries() {
 
 function handleDeliveryChange(payload) {
   if (isASM()) {
-    if (payload.eventType === 'INSERT' && payload.new && payload.new.status === 'pending') {
+    // New supplier delivery submitted by welfare → toast
+    if (payload.eventType === 'INSERT' && payload.new && payload.new.status === 'pending' && payload.new.source === 'supplier') {
       const who = (payload.new.submitted_by || 'staff');
       const units = (payload.new.summary && payload.new.summary.totalUnits) || '';
       toast(`New delivery submitted by ${who}${units ? ` (+${units} units)` : ''}`, 'success');
     }
+    // Welfare has counted a warehouse delivery → notify ASM to confirm
+    if (payload.eventType === 'UPDATE' && payload.new && payload.new.status === 'welfare_counted') {
+      const who = payload.new.counted_by || 'welfare';
+      toast(`Delivery counted by ${who} — tap to review and confirm`, 'success', 4000);
+    }
     try { refreshPendingDeliveriesBanner(); } catch (e) { console.warn('Delivery banner refresh failed:', e); }
   } else {
-    // Welfare: when a delivery is applied by ASM, pull fresh items so the
-    // increased stock quantities show up immediately.
+    // Welfare: new warehouse delivery just arrived → refresh banner immediately
+    if (payload.eventType === 'INSERT' && payload.new &&
+        payload.new.status === 'pending' && payload.new.source === 'warehouse') {
+      const units = (payload.new.summary && payload.new.summary.totalUnits) || '';
+      toast(`Warehouse delivery arrived${units ? ` — ${units} units` : ''} — please count items received`, 'success', 4000);
+      try { refreshPendingDeliveriesBanner(); } catch(e) { console.warn('Welfare banner refresh failed:', e); }
+    }
+    // Welfare: ASM confirmed the delivery → pull fresh stock quantities
     if (payload.eventType === 'UPDATE' && payload.new && payload.new.status === 'applied') {
-      console.log('[Realtime] Delivery applied by ASM — pulling fresh items for Welfare');
+      console.log('[Realtime] Delivery confirmed by ASM — pulling fresh items for Welfare');
       refreshItemsFromCloud().then(() => {
-        toast('New stock added by ASM', 'success', 2500);
+        toast('Stock updated — delivery confirmed by ASM', 'success', 2500);
       }).catch(e => console.warn('Items refresh after delivery apply failed:', e));
     }
   }
