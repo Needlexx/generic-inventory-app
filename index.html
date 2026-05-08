@@ -275,6 +275,7 @@ main { padding: 14px; max-width: 640px; margin: 0 auto; }
   letter-spacing: -0.005em;
 }
 .form-control::placeholder { color: var(--text-softer); }
+textarea.form-control { resize: vertical; min-height: 60px; }
 .form-control:focus {
   outline: none;
   border-color: var(--primary-light);
@@ -1326,7 +1327,7 @@ select.form-control {
    ================================================================= */
 // App version — bump alongside sw.js CACHE_NAME so ASM can verify which build
 // their device is actually running (shown under the email in the user menu).
-window.APP_VERSION = 'v70';
+window.APP_VERSION = 'v71';
 const SUPABASE_URL  = 'https://nogrnsjnwypihjaeulef.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5vZ3Juc2pud3lwaWhqYWV1bGVmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY0MDg2MzQsImV4cCI6MjA5MTk4NDYzNH0.ZxwsWtzzKO_nUSMQpH-FpbA2-5nYH8Nu1IegcKcYjW8';
 const PHOTO_BUCKET  = 'inventory-photos';
