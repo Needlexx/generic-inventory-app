@@ -1327,7 +1327,7 @@ select.form-control {
    ================================================================= */
 // App version — bump alongside sw.js CACHE_NAME so ASM can verify which build
 // their device is actually running (shown under the email in the user menu).
-window.APP_VERSION = 'v71';
+window.APP_VERSION = 'v72';
 const SUPABASE_URL  = 'https://nogrnsjnwypihjaeulef.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5vZ3Juc2pud3lwaWhqYWV1bGVmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY0MDg2MzQsImV4cCI6MjA5MTk4NDYzNH0.ZxwsWtzzKO_nUSMQpH-FpbA2-5nYH8Nu1IegcKcYjW8';
 const PHOTO_BUCKET  = 'inventory-photos';
@@ -3132,17 +3132,24 @@ async function renderWarehouseDashboard() {
       (wi.product_code && si.product_code && norm(wi.product_code) === norm(si.product_code)) ||
       norm(si.name) === norm(wi.name)
     );
-    const sitesNeed = matches.reduce((s, si) => {
+    // Build per-site detail for the breakdown row
+    const siteDetail = matches.map(si => {
+      const hotel = ALL_HOTELS.find(h => h.id === si.hotel_id);
+      const shortName = hotel
+        ? hotel.name.replace(/Holiday Inn/i, 'HI').replace(/Best Western/i, 'BW').replace(/Wembley/i, '').trim()
+        : 'Site';
       const qty = Number(si.quantity) || 0;
-      const max = Number(si.max_stock) || 20;
-      return s + Math.max(0, max - qty);
-    }, 0);
+      const max = Number(si.max_stock) > 0 ? Number(si.max_stock) : 20;
+      const need = Math.max(0, max - qty);
+      return { shortName, qty, max, need };
+    });
+    const sitesNeed = siteDetail.reduce((s, d) => s + d.need, 0);
 
     const canSend      = Math.min(available, sitesNeed);
     const afterSending = whQty - canSend;
     const shortfall    = Math.max(0, sitesNeed - available);
 
-    return { wi, whQty, emergency, available, sitesNeed, canSend, afterSending, shortfall };
+    return { wi, whQty, emergency, available, sitesNeed, canSend, afterSending, shortfall, siteDetail };
   });
 
   // Summary totals
@@ -3233,9 +3240,16 @@ async function renderWarehouseDashboard() {
             <div style="font-size:0.6rem; color:var(--text-light);">after send</div>
           </div>
         </div>
-        <div style="background:var(--border); border-radius:4px; height:4px; overflow:hidden;">
+        <div style="background:var(--border); border-radius:4px; height:4px; overflow:hidden; margin-bottom:${r.siteDetail.length ? '5px' : '0'};">
           <div style="background:${barColor}; height:100%; width:${pct}%;"></div>
         </div>
+        ${r.siteDetail.length ? `
+        <div style="display:flex; flex-wrap:wrap; gap:6px;">
+          ${r.siteDetail.map(d => `
+            <span style="font-size:0.62rem; background:${d.need > 0 ? '#fef3c7' : '#f0fdf4'}; color:${d.need > 0 ? '#92400e' : '#15803d'}; border:1px solid ${d.need > 0 ? '#fcd34d' : '#86efac'}; padding:1px 6px; border-radius:10px;">
+              ${esc(d.shortName)}: ${d.qty}/${d.max}${d.need > 0 ? ` · needs ${d.need}` : ' ✓'}
+            </span>`).join('')}
+        </div>` : ''}
       </div>`;
   };
 
