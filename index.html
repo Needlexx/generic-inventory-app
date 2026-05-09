@@ -1373,7 +1373,7 @@ select.form-control {
    ================================================================= */
 // App version — bump alongside sw.js CACHE_NAME so ASM can verify which build
 // their device is actually running (shown under the email in the user menu).
-window.APP_VERSION = 'v75';
+window.APP_VERSION = 'v76';
 const SUPABASE_URL  = 'https://nogrnsjnwypihjaeulef.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5vZ3Juc2pud3lwaWhqYWV1bGVmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY0MDg2MzQsImV4cCI6MjA5MTk4NDYzNH0.ZxwsWtzzKO_nUSMQpH-FpbA2-5nYH8Nu1IegcKcYjW8';
 const PHOTO_BUCKET  = 'inventory-photos';
@@ -6277,38 +6277,167 @@ function renderWarehouseOwnView() {
 
 /* ---------- Receive from Supplier ---------- */
 
-function openReceiveFromSupplierModal() {
+// Buffer holds qty values + notes across re-renders so adding a new item
+// mid-flight doesn't wipe what the user already typed in.
+let _receiveDraft = { qtys: {}, notes: '' };
+
+function openReceiveFromSupplierModal(preserveDraft) {
   const items = warehouseOwnItems.items || [];
   if (!items.length) { toast('No warehouse items loaded', 'warning'); return; }
-  const rows = items.map(i => `
+  if (!preserveDraft) _receiveDraft = { qtys: {}, notes: '' };
+
+  const rows = items.map(i => {
+    const draftQty = _receiveDraft.qtys[i.id] || 0;
+    return `
     <div style="display:grid; grid-template-columns:1fr auto; gap:8px; align-items:center; padding:8px 0; border-bottom:1px solid var(--border);">
       <div>
         <div style="font-weight:600; font-size:0.85rem;">${esc(i.name)}</div>
         <div style="font-size:0.7rem; color:var(--text-light);">${esc(i.category || '')} · current: <b>${Number(i.quantity)||0}</b> ${esc(i.unit||'')}</div>
       </div>
-      <input type="number" inputmode="numeric" min="0" step="1" value="0"
+      <input type="number" inputmode="numeric" min="0" step="1" value="${draftQty}"
         id="recv_${i.id}"
+        oninput="_receiveDraft.qtys['${i.id}'] = Math.max(0, parseInt(this.value, 10) || 0)"
         style="width:72px; padding:6px 8px; text-align:right; border:1px solid var(--border); border-radius:6px; font-size:0.88rem;"
         placeholder="0">
-    </div>`).join('');
+    </div>`;
+  }).join('');
+
+  const cats = CATEGORIES.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
+  const units = UNITS.map(u => `<option value="${esc(u)}" ${u === 'pcs' ? 'selected' : ''}>${esc(u)}</option>`).join('');
+
   openModal(`
     <div class="modal-header">
       <h3>Receive from Supplier</h3>
       <button class="modal-close" onclick="closeModal()">&times;</button>
     </div>
-    <p style="font-size:0.82rem; color:var(--text-light); margin-bottom:12px;">Enter the quantity received for each item. Leave at 0 to skip.</p>
-    <div class="form-group">
+    <p style="font-size:0.82rem; color:var(--text-light); margin-bottom:10px;">Enter the quantity received for each item. Leave at 0 to skip. If the supplier delivered something not on the list, tap <b>+ New</b>.</p>
+    <div style="display:flex; gap:6px; margin-bottom:8px;">
       <input class="form-control" type="search" placeholder="Search items…"
-        oninput="filterReceiveRows(this.value)"
-        style="margin-bottom:8px;">
+        oninput="filterReceiveRows(this.value)" style="flex:1;">
+      <button class="btn btn-outline" onclick="toggleReceiveAddNewForm()" style="white-space:nowrap; padding:9px 12px;">+ New</button>
     </div>
-    <div id="receiveRowsContainer" style="max-height:52vh; overflow-y:auto; margin-bottom:12px;">${rows}</div>
+
+    <!-- Inline new-product form (hidden by default) -->
+    <div id="receiveAddNewForm" style="display:none; background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:10px 12px; margin-bottom:10px;">
+      <div style="font-weight:700; font-size:0.85rem; margin-bottom:6px;">Add a new product to the warehouse</div>
+      <div class="form-group" style="margin-bottom:6px;">
+        <label class="form-label" style="font-size:0.72rem; margin-bottom:2px;">Product name *</label>
+        <input class="form-control" id="newRecvName" placeholder="e.g. Aptamil 4" style="padding:8px 10px; font-size:0.85rem;">
+      </div>
+      <div style="display:flex; gap:6px;">
+        <div class="form-group" style="flex:1; margin-bottom:6px;">
+          <label class="form-label" style="font-size:0.72rem; margin-bottom:2px;">Category</label>
+          <select class="form-control" id="newRecvCat" style="padding:8px 10px; font-size:0.85rem;">${cats}</select>
+        </div>
+        <div class="form-group" style="flex:1; margin-bottom:6px;">
+          <label class="form-label" style="font-size:0.72rem; margin-bottom:2px;">Unit</label>
+          <select class="form-control" id="newRecvUnit" style="padding:8px 10px; font-size:0.85rem;">${units}</select>
+        </div>
+      </div>
+      <div style="display:flex; gap:6px;">
+        <div class="form-group" style="flex:1; margin-bottom:6px;">
+          <label class="form-label" style="font-size:0.72rem; margin-bottom:2px;">Code (optional)</label>
+          <input class="form-control" id="newRecvCode" style="padding:8px 10px; font-size:0.85rem;">
+        </div>
+        <div class="form-group" style="flex:1; margin-bottom:6px;">
+          <label class="form-label" style="font-size:0.72rem; margin-bottom:2px;">Min stock</label>
+          <input class="form-control" type="number" min="0" id="newRecvMin" value="0" style="padding:8px 10px; font-size:0.85rem;">
+        </div>
+      </div>
+      <div style="display:flex; gap:6px;">
+        <div class="form-group" style="flex:1; margin-bottom:8px;">
+          <label class="form-label" style="font-size:0.72rem; margin-bottom:2px;">Base pack</label>
+          <input class="form-control" type="number" min="1" id="newRecvPack" placeholder="optional" style="padding:8px 10px; font-size:0.85rem;">
+        </div>
+        <div class="form-group" style="flex:1; margin-bottom:8px;">
+          <label class="form-label" style="font-size:0.72rem; margin-bottom:2px;">Cost / unit £</label>
+          <input class="form-control" type="number" min="0" step="0.01" id="newRecvCost" placeholder="0.00" style="padding:8px 10px; font-size:0.85rem;">
+        </div>
+      </div>
+      <div style="display:flex; gap:6px;">
+        <button class="btn btn-outline" onclick="toggleReceiveAddNewForm()" style="flex:1; padding:8px; font-size:0.82rem;">Cancel</button>
+        <button class="btn btn-primary" onclick="addNewReceiveItem()" style="flex:1; padding:8px; font-size:0.82rem;">Add product</button>
+      </div>
+    </div>
+
+    <div id="receiveRowsContainer" style="max-height:48vh; overflow-y:auto; margin-bottom:12px;">${rows}</div>
     <div class="form-group">
       <label class="form-label">Supplier / Notes (optional)</label>
-      <input class="form-control" id="recvSupplierNotes" placeholder="e.g. Nisbets delivery 04/05/2026">
+      <input class="form-control" id="recvSupplierNotes" value="${esc(_receiveDraft.notes || '')}"
+        oninput="_receiveDraft.notes = this.value"
+        placeholder="e.g. Nisbets delivery 04/05/2026">
     </div>
     <button class="btn btn-primary btn-block" onclick="confirmReceiveFromSupplier()">Add to Warehouse Stock</button>
   `);
+}
+
+function toggleReceiveAddNewForm() {
+  const form = document.getElementById('receiveAddNewForm');
+  if (!form) return;
+  const showing = form.style.display !== 'none';
+  form.style.display = showing ? 'none' : 'block';
+  if (!showing) setTimeout(() => document.getElementById('newRecvName')?.focus(), 50);
+}
+
+async function addNewReceiveItem() {
+  const name = (document.getElementById('newRecvName').value || '').trim();
+  if (!name) { toast('Product name is required', 'warning'); return; }
+  const category = document.getElementById('newRecvCat').value;
+  const unit = document.getElementById('newRecvUnit').value;
+  const product_code = (document.getElementById('newRecvCode').value || '').trim() || null;
+  const min_stock = Math.max(0, parseInt(document.getElementById('newRecvMin').value, 10) || 0);
+  const rawPack = parseInt(document.getElementById('newRecvPack').value, 10);
+  const base_pack = (!isNaN(rawPack) && rawPack > 0) ? rawPack : null;
+  const rawCost = parseFloat(document.getElementById('newRecvCost').value);
+  const cost = (!isNaN(rawCost) && rawCost > 0) ? Math.round(rawCost * 100) / 100 : null;
+
+  const whId = getWarehouseHotelId();
+  if (!whId) { toast('Warehouse not configured', 'error'); return; }
+
+  // Duplicate guard — same name OR same product_code already exists
+  const existing = (warehouseOwnItems.items || []).find(x =>
+    x.name.toLowerCase() === name.toLowerCase() ||
+    (product_code && x.product_code && x.product_code.toLowerCase() === product_code.toLowerCase())
+  );
+  if (existing) {
+    toast(`"${existing.name}" already exists — find it in the list`, 'warning', 4000);
+    return;
+  }
+
+  showSyncStatus('syncing');
+  // Insert with quantity=0 so the existing receive flow can add the qty
+  // exactly once when the user clicks "Add to Warehouse Stock".
+  const { data, error } = await sb.from('items')
+    .insert({ name, category, quantity: 0, unit, min_stock, product_code, cost, base_pack, hotel_id: whId })
+    .select('*').single();
+  if (error) { showSyncStatus('error'); toast('Add failed: ' + error.message, 'error'); return; }
+  showSyncStatus('synced');
+
+  // Add to local cache + keep alphabetical order matching the warehouse Stock view
+  warehouseOwnItems.items.push(data);
+  warehouseOwnItems.items.sort((a, b) =>
+    (a.category || '').localeCompare(b.category || '') ||
+    (a.name || '').localeCompare(b.name || ''));
+
+  toast(`"${name}" added — enter the quantity received below`, 'success', 3500);
+  // Re-open modal preserving qtys + notes the user already entered
+  openReceiveFromSupplierModal(true);
+
+  // Scroll to and briefly highlight the new row so it's easy to find
+  setTimeout(() => {
+    const newInput = document.getElementById('recv_' + data.id);
+    if (newInput) {
+      newInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      newInput.focus();
+      newInput.select();
+      const row = newInput.closest('div[style*="grid-template-columns"]');
+      if (row) {
+        row.style.transition = 'background 1.2s';
+        row.style.background = '#fef3c7';
+        setTimeout(() => { row.style.background = ''; }, 1800);
+      }
+    }
+  }, 80);
 }
 
 function filterReceiveRows(q) {
@@ -6372,6 +6501,8 @@ async function confirmReceiveFromSupplier() {
     showSyncStatus('synced');
     toast(`Stock received: ${lines.length} product${lines.length !== 1 ? 's' : ''} updated`, 'success');
   }
+  // Clear the draft buffer so the next receipt starts fresh
+  _receiveDraft = { qtys: {}, notes: '' };
   renderWarehouseOwnView();
   // Refresh the receipts list on the Order & Receive tab if it's mounted
   try { if (document.getElementById('recentReceiptsList')) loadRecentReceipts(); } catch(_) {}
