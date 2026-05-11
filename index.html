@@ -1359,7 +1359,7 @@ select.form-control {
    ================================================================= */
 // App version — bump alongside sw.js CACHE_NAME so ASM can verify which build
 // their device is actually running (shown under the email in the user menu).
-window.APP_VERSION = 'v82';
+window.APP_VERSION = 'v83';
 const SUPABASE_URL  = 'https://nogrnsjnwypihjaeulef.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5vZ3Juc2pud3lwaWhqYWV1bGVmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY0MDg2MzQsImV4cCI6MjA5MTk4NDYzNH0.ZxwsWtzzKO_nUSMQpH-FpbA2-5nYH8Nu1IegcKcYjW8';
 const PHOTO_BUCKET  = 'inventory-photos';
@@ -4646,6 +4646,49 @@ async function savePasswordChange() {
 function sendPasswordReset(prefillEmail) {
   const current = document.getElementById('loginEmail')?.value?.trim() || '';
   const email = prefillEmail || current;
+
+  // If the login card is on screen, swap its content directly — the modal
+  // z-index (200) is lower than the login screen z-index (500) so a modal
+  // would be hidden behind it.
+  const card = document.querySelector('.login-card');
+  if (card) {
+    card.innerHTML = `
+      <div class="login-brand">
+        <div class="login-logo">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>
+        </div>
+        <div class="login-title">Reset Password</div>
+        <div class="login-sub">Enter your email and we'll send a reset link</div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Email address</label>
+        <input type="email" class="form-control" id="resetEmail"
+               value="${(email || '').replace(/"/g,'&quot;')}"
+               placeholder="name@sosproperty.co.uk"
+               autocapitalize="off" autocomplete="email">
+      </div>
+      <div id="resetErr" style="display:none; font-size:0.8rem; color:var(--danger);
+           background:var(--danger-bg); border:1px solid var(--danger-border);
+           padding:8px 10px; border-radius:8px; margin-bottom:10px;"></div>
+      <button class="btn btn-primary btn-block" id="resetSendBtn"
+              onclick="doSendReset()" style="padding:13px;">Send reset link</button>
+      <div style="text-align:center; margin-top:14px;">
+        <button type="button" class="link-inline" onclick="showLoginScreen()">← Back to sign in</button>
+      </div>
+      <div class="login-footer">Managed by SOS Property &bull; Secure login</div>
+    `;
+    setTimeout(() => {
+      const inp = document.getElementById('resetEmail');
+      if (inp) {
+        inp.focus();
+        inp.addEventListener('keydown', e => { if (e.key === 'Enter') doSendReset(); });
+      }
+    }, 80);
+    return;
+  }
+
+  // Fallback: user is already logged in and opened this from the user menu —
+  // modal is fine here because the login screen is not in the DOM.
   openModal(`
     <div class="modal-header"><h3>Reset your password</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
     <p style="margin-bottom:14px; font-size:0.85rem; color:var(--text-light);">Enter your email and we'll send a link to reset your password.</p>
@@ -4676,12 +4719,13 @@ async function doSendReset() {
   const btn = document.getElementById('resetSendBtn');
   if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Sending...'; }
   const redirectTo = location.origin + location.pathname;
-  // We deliberately ignore the result here — showing the same message
-  // regardless of whether the email exists prevents account-enumeration
-  // attacks (an attacker can't probe which emails are registered).
+  // Deliberately ignore the result — same message whether email exists or not
+  // prevents account-enumeration attacks.
   try { await sb.auth.resetPasswordForEmail(email, { redirectTo }); } catch(_) {}
   closeModal();
-  toast('If that email is registered, a reset link has been sent. Check your inbox.', 'success', 5000);
+  // Show success on the login card if it's still in the DOM (swapped back by showLoginScreen)
+  showLoginScreen();
+  toast('If that email is registered, a reset link has been sent. Check your inbox.', 'success', 6000);
 }
 
 async function afterAuthReady() {
