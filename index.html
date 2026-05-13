@@ -1144,6 +1144,26 @@ select.form-control {
     </button>
   </div>
 
+  <!-- === SITE STOCK COUNT REPORT === -->
+  <div class="card" style="margin-top:4px;">
+    <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
+      <div style="width:36px; height:36px; border-radius:10px; background:linear-gradient(135deg,#e53e3e,#c53030); display:flex; align-items:center; justify-content:center; flex-shrink:0;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+      </div>
+      <div>
+        <div style="font-weight:700; font-size:0.95rem; letter-spacing:-0.01em;">Site Stock Count Report</div>
+        <div style="font-size:0.75rem; color:var(--text-light); margin-top:2px;">Snapshot of current stock levels at this site</div>
+      </div>
+    </div>
+    <div style="font-size:0.78rem; color:var(--text-muted); margin-bottom:12px; padding:8px 10px; background:var(--bg); border-radius:8px; border:1px solid var(--border);">
+      Report will be saved as <strong id="scReportFilename">SC-HIW-ddmmyyyy.pdf</strong>
+    </div>
+    <button class="btn btn-primary btn-block" onclick="generateSiteStockCountPDF()">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      Generate &amp; Preview PDF
+    </button>
+  </div>
+
   <!-- === HISTORY TAB === -->
   <div class="tab-page" id="pageHistory">
     <div class="card" style="padding:10px 12px;">
@@ -1359,7 +1379,7 @@ select.form-control {
    ================================================================= */
 // App version — bump alongside sw.js CACHE_NAME so ASM can verify which build
 // their device is actually running (shown under the email in the user menu).
-window.APP_VERSION = 'v83';
+window.APP_VERSION = 'v84';
 const SUPABASE_URL  = 'https://nogrnsjnwypihjaeulef.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5vZ3Juc2pud3lwaWhqYWV1bGVmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY0MDg2MzQsImV4cCI6MjA5MTk4NDYzNH0.ZxwsWtzzKO_nUSMQpH-FpbA2-5nYH8Nu1IegcKcYjW8';
 const PHOTO_BUCKET  = 'inventory-photos';
@@ -1899,7 +1919,7 @@ function switchTab(name) {
 
   if (name === 'Issue') initIssueFlow();
   if (name === 'Stock') renderInventory();
-  if (name === 'Count') { renderCount(); refreshPendingSubmissionsBanner(); }
+  if (name === 'Count') { renderCount(); refreshPendingSubmissionsBanner(); updateSCFilenameChip(); }
   if (name === 'History') renderHistory();
   if (name === 'Dashboard') renderDashboard();
   if (name === 'Reports') { initReports(); renderArchive(); }
@@ -4233,6 +4253,127 @@ function _pdfFooter(doc, data) {
   doc.text(`Page ${data.pageNumber} of ${pageCount}`, pageSize.width - 80, pageHeight - 20);
   doc.text(`SOS Property Inventory`, 40, pageHeight - 20);
   doc.setTextColor(0);
+}
+
+/* ------------------------------------------------------------------
+   SITE STOCK COUNT REPORT — snapshot of current inventory
+   Filename: SC-HIW-ddmmyyyy.pdf  /  SC-BWW-ddmmyyyy.pdf
+   ------------------------------------------------------------------ */
+function _siteCodeAbbr() {
+  if (!HOTEL || !HOTEL.code) return 'SITE';
+  const map = { HIWEMBLEY: 'HIW', BWWEMBLEY: 'BWW', WAREHOUSE: 'WH' };
+  return map[HOTEL.code] || HOTEL.code.replace('WEMBLEY','W').substring(0, 5);
+}
+
+function _todayDDMMYYYY() {
+  const d = new Date();
+  return String(d.getDate()).padStart(2,'0') +
+         String(d.getMonth() + 1).padStart(2,'0') +
+         d.getFullYear();
+}
+
+// Keep the preview filename chip in sync when the Count tab is shown
+function updateSCFilenameChip() {
+  const el = document.getElementById('scReportFilename');
+  if (el) el.textContent = `SC-${_siteCodeAbbr()}-${_todayDDMMYYYY()}.pdf`;
+}
+
+function generateSiteStockCountPDF() {
+  const items = getItems();
+  if (!items || items.length === 0) {
+    toast('No items found — pull data first.', 'warning');
+    return;
+  }
+  const abbr     = _siteCodeAbbr();
+  const datePart = _todayDDMMYYYY();
+  const filename = `SC-${abbr}-${datePart}.pdf`;
+  const hotelName = (HOTEL && HOTEL.name && HOTEL.code !== 'WAREHOUSE') ? HOTEL.name : 'SOS Property';
+  const generatedAt = new Date().toLocaleString('en-GB', {
+    day: '2-digit', month: 'short', year: 'numeric',
+    hour: '2-digit', minute: '2-digit'
+  });
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+
+  // Header block
+  doc.setFillColor(229, 62, 62);
+  doc.rect(0, 0, doc.internal.pageSize.width, 54, 'F');
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(16);
+  doc.setFont(undefined, 'bold');
+  doc.text(`${hotelName} — Site Stock Count`, 40, 30);
+  doc.setFontSize(9);
+  doc.setFont(undefined, 'normal');
+  doc.text(`Report ref: SC-${abbr}-${datePart}     Generated: ${generatedAt}`, 40, 44);
+  doc.setTextColor(0);
+
+  // Summary line
+  const totalItems  = items.length;
+  const lowItems    = items.filter(i => i.minStock > 0 && i.quantity <= i.minStock).length;
+  const outItems    = items.filter(i => i.quantity === 0).length;
+  const totalUnits  = items.reduce((s, i) => s + (Number(i.quantity) || 0), 0);
+  doc.setFontSize(10);
+  doc.setTextColor(60);
+  doc.text(
+    `Total items: ${totalItems}    Total units: ${totalUnits}    Low stock: ${lowItems}    Out of stock: ${outItems}`,
+    40, 72
+  );
+  doc.setTextColor(0);
+
+  // Sort: category A→Z, then name A→Z
+  const sorted = [...items].sort((a, b) => {
+    const catCmp = (a.category || '').localeCompare(b.category || '');
+    return catCmp !== 0 ? catCmp : (a.name || '').localeCompare(b.name || '');
+  });
+
+  const body = sorted.map(i => {
+    const qty    = Number(i.quantity) || 0;
+    const minS   = Number(i.minStock)  || 0;
+    const maxS   = Number(i.maxStock)  || 0;
+    const status = qty === 0 ? 'Out of stock' : (minS > 0 && qty <= minS ? 'Low stock' : 'OK');
+    return [
+      i.category || '—',
+      i.name || '—',
+      i.productCode || '—',
+      i.unit || '—',
+      String(qty),
+      minS > 0 ? String(minS) : '—',
+      maxS > 0 ? String(maxS) : '—',
+      status
+    ];
+  });
+
+  doc.autoTable({
+    startY: 88,
+    head: [['Category', 'Item', 'Code', 'Unit', 'Qty', 'Min', 'Max', 'Status']],
+    body,
+    styles:      { fontSize: 8, cellPadding: 3 },
+    headStyles:  { fillColor: [229, 62, 62], fontStyle: 'bold' },
+    columnStyles: {
+      0: { cellWidth: 80 },
+      1: { cellWidth: 160 },
+      2: { cellWidth: 70 },
+      3: { cellWidth: 40 },
+      4: { cellWidth: 35, halign: 'center' },
+      5: { cellWidth: 35, halign: 'center' },
+      6: { cellWidth: 35, halign: 'center' },
+      7: { cellWidth: 65, halign: 'center' }
+    },
+    didParseCell: (data) => {
+      if (data.section === 'body' && data.column.index === 7) {
+        const v = data.cell.raw;
+        if (v === 'Out of stock') data.cell.styles.textColor = [197, 48, 48];
+        else if (v === 'Low stock')  data.cell.styles.textColor = [180, 83, 9];
+        else                         data.cell.styles.textColor = [56, 161, 105];
+        data.cell.styles.fontStyle = 'bold';
+      }
+    },
+    didDrawPage: (data) => _pdfFooter(doc, data)
+  });
+
+  toast('Generating stock count PDF…', 'info', 1500);
+  previewPDF(doc, filename);
 }
 
 /* ------------------------------------------------------------------
